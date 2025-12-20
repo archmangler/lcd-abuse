@@ -315,6 +315,306 @@ static void lcd_print(const char *s)
     while (*s) lcd_data((uint8_t)*s++);
 }
 
+// Clear a specific line by filling with spaces
+static void lcd_clear_line(uint8_t row)
+{
+    lcd_set_cursor(row, 0);
+    for (uint8_t i = 0; i < 20; i++)
+    {
+        lcd_data(' ');
+    }
+    lcd_set_cursor(row, 0);
+}
+
+// Scroll display up by one line
+static void lcd_scroll_up(void)
+{
+    // Read lines 1, 2, 3 and move them to lines 0, 1, 2
+    // We'll use a simple approach: clear line 0, then shift content
+    // Actually, simpler: just scroll the cursor addresses
+    // HD44780 doesn't have hardware scroll, so we'll manually shift
+    
+    // For now, we'll clear line 0 and move cursor to line 3
+    // The caller will handle writing new content
+    lcd_cmd(0x18);  // Display shift left (can help with scrolling effect)
+}
+
+// Clear entire display
+static void lcd_clear(void)
+{
+    lcd_cmd(0x01);
+    delay_ms(2);  // Clear command needs >1.5ms
+}
+
+// Stream text character by character with line wrapping and scrolling
+static void lcd_stream_text(const char *text, uint32_t char_delay_ms)
+{
+    static uint8_t current_row = 0;
+    static uint8_t current_col = 0;
+    
+    while (*text)
+    {
+        char c = *text++;
+        
+        // Handle newlines
+        if (c == '\n')
+        {
+            current_row++;
+            current_col = 0;
+            
+            // If we've filled all 4 rows, scroll up
+            if (current_row >= 4)
+            {
+                // Scroll: move lines 1,2,3 up to 0,1,2, clear line 3
+                // Since HD44780 doesn't have easy scroll, we'll clear and restart from top
+                // For continuous streaming, we'll wrap to top after line 3
+                lcd_clear();
+                current_row = 0;
+                current_col = 0;
+                delay_ms(char_delay_ms * 3); // Pause before restarting
+            }
+            else
+            {
+                lcd_set_cursor(current_row, current_col);
+            }
+            continue;
+        }
+        
+        // Handle regular characters
+        if (current_col >= 20)
+        {
+            // Line wrap
+            current_row++;
+            current_col = 0;
+            
+            // If we've filled all 4 rows, clear and restart
+            if (current_row >= 4)
+            {
+                lcd_clear();
+                current_row = 0;
+                current_col = 0;
+                delay_ms(char_delay_ms * 3); // Pause before restarting
+            }
+            else
+            {
+                lcd_set_cursor(current_row, current_col);
+            }
+        }
+        
+        // Print character
+        lcd_data((uint8_t)c);
+        current_col++;
+        
+        // Delay between characters for readability
+        delay_ms(char_delay_ms);
+    }
+}
+
+// Stream text continuously in a loop with proper scrolling
+static void lcd_stream_continuous(const char *text, uint32_t char_delay_ms)
+{
+    static char display_buffer[4][21]; // 4 lines, 20 chars + null terminator
+    static uint8_t line_index = 0;
+    static uint8_t char_pos = 0;
+    
+    const char *text_ptr = text;
+    
+    while (*text_ptr)
+    {
+        char c = *text_ptr++;
+        
+        // Handle newlines and line breaks
+        if (c == '\n' || char_pos >= 20)
+        {
+            // Terminate current line
+            display_buffer[line_index][char_pos] = '\0';
+            line_index++;
+            char_pos = 0;
+            
+            // If we've filled all 4 lines, scroll up
+            if (line_index >= 4)
+            {
+                // Display all 4 lines
+                for (uint8_t i = 0; i < 4; i++)
+                {
+                    lcd_set_cursor(i, 0);
+                    lcd_print(display_buffer[i]);
+                    // Clear rest of line if needed
+                    uint8_t len = 0;
+                    while (display_buffer[i][len] && len < 20) len++;
+                    for (uint8_t j = len; j < 20; j++)
+                    {
+                        lcd_data(' ');
+                    }
+                }
+                
+                delay_ms(char_delay_ms * 20); // Pause to read
+                
+                // Shift lines up (move line 1->0, 2->1, 3->2)
+                for (uint8_t i = 0; i < 3; i++)
+                {
+                    for (uint8_t j = 0; j < 21; j++)
+                    {
+                        display_buffer[i][j] = display_buffer[i+1][j];
+                    }
+                }
+                // Clear line 3
+                for (uint8_t j = 0; j < 21; j++)
+                {
+                    display_buffer[3][j] = '\0';
+                }
+                line_index = 3; // Continue writing to line 3
+            }
+            
+            if (c == '\n')
+            {
+                continue; // Skip the newline character
+            }
+        }
+        
+        // Store character in current line
+        if (char_pos < 20)
+        {
+            display_buffer[line_index][char_pos++] = c;
+        }
+    }
+    
+    // Display any remaining text
+    if (line_index < 4 && char_pos > 0)
+    {
+        display_buffer[line_index][char_pos] = '\0';
+        for (uint8_t i = 0; i <= line_index; i++)
+        {
+            lcd_set_cursor(i, 0);
+            lcd_print(display_buffer[i]);
+            // Clear rest of line
+            uint8_t len = 0;
+            while (display_buffer[i][len] && len < 20) len++;
+            for (uint8_t j = len; j < 20; j++)
+            {
+                lcd_data(' ');
+            }
+        }
+    }
+}
+
+// Simple continuous text streaming with line wrapping
+static void lcd_stream_simple(const char *text, uint32_t char_delay_ms)
+{
+    uint8_t row = 0;
+    uint8_t col = 0;
+    
+    while (*text)
+    {
+        char c = *text++;
+        
+        // Skip carriage returns
+        if (c == '\r')
+        {
+            continue;
+        }
+        
+        // Handle newlines
+        if (c == '\n')
+        {
+            row++;
+            col = 0;
+            if (row >= 4)
+            {
+                // Scroll: clear display and start over
+                lcd_clear();
+                row = 0;
+                col = 0;
+                delay_ms(char_delay_ms * 10); // Pause before restart
+            }
+            lcd_set_cursor(row, col);
+            continue;
+        }
+        
+        // Wrap at end of line
+        if (col >= 20)
+        {
+            row++;
+            col = 0;
+            if (row >= 4)
+            {
+                // Scroll: clear display and start over
+                lcd_clear();
+                row = 0;
+                col = 0;
+                delay_ms(char_delay_ms * 10); // Pause before restart
+            }
+            lcd_set_cursor(row, col);
+        }
+        
+        // Print character
+        lcd_data((uint8_t)c);
+        col++;
+        
+        // Small delay for readability
+        if (char_delay_ms > 0)
+        {
+            delay_ms(char_delay_ms);
+        }
+    }
+}
+
+// Story text to stream continuously
+static const char story_text[] = 
+    "Escape from Planet Metron!\n\n"
+    "Far, far away, where the stars shine like tiny lanterns, there was a strange planet called Planet Metron.\n\n"
+    "Planet Metron was not kind.\n\n"
+    "It was made of metal instead of grass, and its mountains were sharp and cold. Long tunnels ran through it like the inside of a giant machine. The planet hummed all the time, like it was breathing in its sleep.\n\n"
+    "On this planet lived two children.\n\n"
+    "A brother named Troy, and his little sister Irana.\n\n"
+    "They had lived there for as long as they could remember.\n\n"
+    "Planet Metron was ruled by the Archons—tall robot creatures made of dark metal and shadow. They had glowing eyes and moved without making a sound. The Archons watched everything. They did not laugh. They did not smile. They did not sleep.\n\n"
+    "Their job was to make sure no one ever left.\n\n"
+    "Troy and Irana were kept in an old room with broken windows and flickering lights. At night, Troy would listen to the planet's humming and feel scared.\n\n"
+    "But Irana would whisper, \"It's okay. I'm listening.\"\n\n"
+    "Irana was very good at listening.\n\n"
+    "She could tell when the Archons were nearby and when the planet was changing its mind. She could feel when doors would open and when hallways would twist.\n\n"
+    "One day, the humming changed.\n\n"
+    "The planet shook gently, like it had a bad dream.\n\n"
+    "Irana sat up. \"Troy,\" she said quietly, \"the planet is busy.\"\n\n"
+    "\"Busy with what?\" Troy asked.\n\n"
+    "\"Busy watching something else,\" she replied. \"That means it's our turn.\"\n\n"
+    "She pulled out a small glowing piece of metal she had found long ago. It blinked like a tiny star.\n\n"
+    "\"This can help us get out,\" she said.\n\n"
+    "Troy's heart beat fast. \"Really?\"\n\n"
+    "Irana nodded. \"We have to be brave.\"\n\n"
+    "They crawled through small tunnels and tiptoed through long halls. The lights flickered, and far away they heard the soft click-click of Archons moving.\n\n"
+    "Suddenly, an Archon stepped in front of them.\n\n"
+    "It was tall and scary, and its eyes glowed bright.\n\n"
+    "Troy didn't think. He just acted.\n\n"
+    "He threw a small flashing spike, and POP! A bright light filled the hallway. The Archon stumbled and fell apart into quiet pieces.\n\n"
+    "Irana grabbed Troy's hand. \"Come on!\"\n\n"
+    "At last, they reached the outside of the planet.\n\n"
+    "There, sitting on a metal platform, was a tiny spaceship. It was old and scratched and looked tired ... but it was real.\n\n"
+    "As they ran toward it, the planet tried to stop them. Metal arms reached up from the ground, trying to pull them back.\n\n"
+    "One grabbed Irana's foot.\n\n"
+    "\"Irana!\" Troy cried.\n\n"
+    "\"I'm okay!\" she said, cutting it away. \"Keep going!\"\n\n"
+    "Then something very big appeared.\n\n"
+    "The biggest Archon of all.\n\n"
+    "It stood between them and the ship, darker than the others, with glowing symbols floating around its head. Everything felt slow and heavy.\n\n"
+    "Troy couldn't move.\n\n"
+    "Irana looked at her brother and knew what she had to do.\n\n"
+    "She squeezed the glowing metal piece in her hand and pressed it hard.\n\n"
+    "A bright, warm light burst out, like a tiny sun.\n\n"
+    "The big Archon screamed without sound and disappeared.\n\n"
+    "The ship's door opened.\n\n"
+    "They ran inside.\n\n"
+    "The ship lifted off just as Planet Metron began to close itself up again. The Archons watched from below, their shadows stretching but never reaching.\n\n"
+    "Soon, the stars filled the window.\n\n"
+    "The ship floated quietly.\n\n"
+    "Irana leaned against Troy. \"We did it,\" she said softly.\n\n"
+    "Troy smiled. \"We're free.\"\n\n"
+    "Behind them, Planet Metron went quiet once more.\n\n"
+    "It was still a prison.\n\n"
+    "But it was no longer perfect.\n\n"
+    "Because two brave children had escaped—and taken their hope with them, straight into the stars.\n\n";
+
 int main(void)
 {
     // Enable GPIOA clock
@@ -341,33 +641,83 @@ int main(void)
     lcd_init();
     delay_ms(10);
     
-    // Display initial message
-    lcd_set_cursor(0, 0);
-    lcd_print("STM32F411RE");
-    lcd_set_cursor(1, 0);
-    lcd_print("LCD 20x4 I2C");
-    lcd_set_cursor(2, 0);
-    lcd_print("Heartbeat: OK");
-    lcd_set_cursor(3, 0);
-    lcd_print("System Ready");
+    // Clear display
+    lcd_clear();
     
-    // Main loop - blink LED heartbeat and update LCD
+    // Main loop - blink LED heartbeat and stream text continuously
     uint32_t heartbeat_counter = 0;
     while (1)
     {
-        // Toggle PA5 (LED heartbeat) every 500ms
-        GPIOA->ODR ^= GPIO_ODR_OD5;
+        // Stream the story text continuously
+        // Character delay of ~30ms provides readable scrolling speed
+        const char *text_ptr = story_text;
+        uint8_t row = 0;
+        uint8_t col = 0;
         
-        heartbeat_counter++;
-        if (heartbeat_counter >= 10) // Every 5 seconds (10 * 500ms)
+        while (*text_ptr)
         {
-            heartbeat_counter = 0;
-            // Update heartbeat indicator on LCD
-            lcd_set_cursor(2, 12);
-            lcd_print("OK");
+            char c = *text_ptr++;
+            
+            // Toggle LED heartbeat approximately every 500ms
+            heartbeat_counter++;
+            if (heartbeat_counter >= 17) // ~500ms at 30ms per char (500/30 ≈ 17)
+            {
+                GPIOA->ODR ^= GPIO_ODR_OD5;
+                heartbeat_counter = 0;
+            }
+            
+            // Skip carriage returns
+            if (c == '\r')
+            {
+                continue;
+            }
+            
+            // Handle newlines
+            if (c == '\n')
+            {
+                row++;
+                col = 0;
+                if (row >= 4)
+                {
+                    // Scroll: clear display and start over
+                    lcd_clear();
+                    row = 0;
+                    col = 0;
+                    delay_ms(500); // Pause before restart
+                }
+                lcd_set_cursor(row, col);
+                continue;
+            }
+            
+            // Wrap at end of line
+            if (col >= 20)
+            {
+                row++;
+                col = 0;
+                if (row >= 4)
+                {
+                    // Scroll: clear display and start over
+                    lcd_clear();
+                    row = 0;
+                    col = 0;
+                    delay_ms(500); // Pause before restart
+                }
+                lcd_set_cursor(row, col);
+            }
+            
+            // Print character
+            lcd_data((uint8_t)c);
+            col++;
+            
+            // Small delay for readability (30ms per character)
+            delay_ms(30);
         }
         
-        // Delay ~500ms
-        delay_ms(500);
+        // Brief pause before restarting the story
+        delay_ms(2000);
+        lcd_clear();
+        row = 0;
+        col = 0;
+        heartbeat_counter = 0;
     }
 }
