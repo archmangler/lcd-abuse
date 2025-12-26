@@ -26,12 +26,14 @@
 #define RCC_BASE            (0x40023800UL)
 #define GPIOA_BASE          (0x40020000UL)
 #define GPIOB_BASE          (0x40020400UL)
+#define GPIOC_BASE          (0x40020800UL)
 #define I2C1_BASE           (0x40005400UL)
 
 // Register Structures
 #define RCC                 ((RCC_TypeDef *)RCC_BASE)
 #define GPIOA               ((GPIO_TypeDef *)GPIOA_BASE)
 #define GPIOB               ((GPIO_TypeDef *)GPIOB_BASE)
+#define GPIOC               ((GPIO_TypeDef *)GPIOC_BASE)
 #define I2C1                ((I2C_TypeDef *)I2C1_BASE)
 
 typedef struct {
@@ -80,7 +82,18 @@ typedef struct {
 // Bit definitions - RCC
 #define RCC_AHB1ENR_GPIOAEN         (1U << 0)   // GPIOA clock enable
 #define RCC_AHB1ENR_GPIOBEN         (1U << 1)   // GPIOB clock enable
+#define RCC_AHB1ENR_GPIOCEN         (1U << 2)   // GPIOC clock enable
 #define RCC_APB1ENR_I2C1EN          (1U << 21)  // I2C1 clock enable
+
+// Optocoupler pin definitions (PC6-PC9)
+// PC7: optocoupler input-4 : motor-A Forward input
+// PC9: optocoupler input-3: motor-A Reverse Input
+// PC6: optocoupler input-2: motor-B forward input
+// PC8: optocoupler input-1: motor-B reverse input
+#define OPTOC_PC6           (6)   // Motor-B reverse
+#define OPTOC_PC7           (7)   // Motor-A forward
+#define OPTOC_PC8           (8)   // Motor-B forward
+#define OPTOC_PC9           (9)   // Motor-A reverse
 
 // Bit definitions - GPIO
 #define GPIO_MODER_MODER5_POS       (5 * 2)     // PA5 mode register position
@@ -139,6 +152,115 @@ void delay_ms(uint32_t ms)
     {
         __asm volatile("nop");
     }
+}
+
+// Optocoupler control functions
+// Initialize optocoupler GPIO pins (PC6, PC7, PC8, PC9)
+void Optocoupler_Init(void)
+{
+    // Enable GPIOC clock
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
+    
+    // Configure PC6, PC7, PC8, PC9 as outputs
+    // PC6 - Motor-B reverse
+    GPIOC->MODER &= ~(3U << (OPTOC_PC6 * 2));
+    GPIOC->MODER |= (1U << (OPTOC_PC6 * 2));      // Output mode
+    GPIOC->OTYPER &= ~(1U << OPTOC_PC6);          // Push-pull
+    GPIOC->OSPEEDR |= (1U << (OPTOC_PC6 * 2));    // Medium speed
+    GPIOC->PUPDR &= ~(3U << (OPTOC_PC6 * 2));     // No pull-up/pull-down
+    
+    // PC7 - Motor-A forward
+    GPIOC->MODER &= ~(3U << (OPTOC_PC7 * 2));
+    GPIOC->MODER |= (1U << (OPTOC_PC7 * 2));      // Output mode
+    GPIOC->OTYPER &= ~(1U << OPTOC_PC7);          // Push-pull
+    GPIOC->OSPEEDR |= (1U << (OPTOC_PC7 * 2));    // Medium speed
+    GPIOC->PUPDR &= ~(3U << (OPTOC_PC7 * 2));     // No pull-up/pull-down
+    
+    // PC8 - Motor-B forward
+    GPIOC->MODER &= ~(3U << (OPTOC_PC8 * 2));
+    GPIOC->MODER |= (1U << (OPTOC_PC8 * 2));      // Output mode
+    GPIOC->OTYPER &= ~(1U << OPTOC_PC8);          // Push-pull
+    GPIOC->OSPEEDR |= (1U << (OPTOC_PC8 * 2));    // Medium speed
+    GPIOC->PUPDR &= ~(3U << (OPTOC_PC8 * 2));     // No pull-up/pull-down
+    
+    // PC9 - Motor-A reverse
+    GPIOC->MODER &= ~(3U << (OPTOC_PC9 * 2));
+    GPIOC->MODER |= (1U << (OPTOC_PC9 * 2));      // Output mode
+    GPIOC->OTYPER &= ~(1U << OPTOC_PC9);          // Push-pull
+    GPIOC->OSPEEDR |= (1U << (OPTOC_PC9 * 2));    // Medium speed
+    GPIOC->PUPDR &= ~(3U << (OPTOC_PC9 * 2));     // No pull-up/pull-down
+    
+    // Ensure all optocoupler pins are OFF initially
+    Optocoupler_AllOff();
+}
+
+// Turn off all optocoupler outputs (safety function)
+void Optocoupler_AllOff(void)
+{
+    // Clear PC6, PC7, PC8, PC9 (set to LOW)
+    GPIOC->BSRR = (1U << (OPTOC_PC6 + 16));  // Reset PC6
+    GPIOC->BSRR = (1U << (OPTOC_PC7 + 16));  // Reset PC7
+    GPIOC->BSRR = (1U << (OPTOC_PC8 + 16));  // Reset PC8
+    GPIOC->BSRR = (1U << (OPTOC_PC9 + 16));  // Reset PC9
+}
+
+// Set a specific optocoupler pin (turn on one channel)
+// channel: 1=PC8 (Motor-B reverse), 2=PC6 (Motor-B forward), 
+//          3=PC9 (Motor-A reverse), 4=PC7 (Motor-A forward)
+void Optocoupler_Set(uint8_t channel)
+{
+    // First, turn off all channels for safety
+    Optocoupler_AllOff();
+    
+    // Then turn on the requested channel
+    switch(channel)
+    {
+        case 1:  // Motor-B reverse (PC8)
+            GPIOC->BSRR = (1U << OPTOC_PC8);  // Set PC8 HIGH
+            break;
+        case 2:  // Motor-B forward (PC6)
+            GPIOC->BSRR = (1U << OPTOC_PC6);  // Set PC6 HIGH
+            break;
+        case 3:  // Motor-A reverse (PC9)
+            GPIOC->BSRR = (1U << OPTOC_PC9);  // Set PC9 HIGH
+            break;
+        case 4:  // Motor-A forward (PC7)
+            GPIOC->BSRR = (1U << OPTOC_PC7);  // Set PC7 HIGH
+            break;
+        default:
+            // Invalid channel, do nothing (all remain off)
+            break;
+    }
+}
+
+// Test sequence: Activate each optocoupler channel for 1 second sequentially
+// Only one channel is active at a time to prevent driver overload
+void Optocoupler_TestSequence(void)
+{
+    // Turn off all channels first
+    Optocoupler_AllOff();
+    delay_ms(100);
+    
+    // Test sequence: Each channel active for 1 second
+    // Channel 1: Motor-B reverse (PC8)
+    Optocoupler_Set(1);
+    delay_ms(1000);
+    
+    // Channel 2: Motor-B forward (PC6)
+    Optocoupler_Set(2);
+    delay_ms(1000);
+    
+    // Channel 3: Motor-A reverse (PC9)
+    Optocoupler_Set(3);
+    delay_ms(1000);
+    
+    // Channel 4: Motor-A forward (PC7)
+    Optocoupler_Set(4);
+    delay_ms(1000);
+    
+    // Turn off all channels after test
+    Optocoupler_AllOff();
+    delay_ms(100);
 }
 
 void delay_us(uint32_t us)
@@ -632,6 +754,13 @@ int main(void)
     
     // No pull-up/pull-down (optional, 0 = default)
     GPIOA->PUPDR &= ~(3U << GPIO_MODER_MODER5_POS);
+    
+    // Initialize optocoupler GPIO pins
+    Optocoupler_Init();
+    
+    // Run optocoupler test sequence (before LCD initialization)
+    // This tests each channel individually for 1 second
+    Optocoupler_TestSequence();
     
     // Initialize I2C1 for LCD
     I2C1_Init();
