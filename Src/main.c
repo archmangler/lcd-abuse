@@ -28,6 +28,7 @@
 #define GPIOB_BASE          (0x40020400UL)
 #define GPIOC_BASE          (0x40020800UL)
 #define I2C1_BASE           (0x40005400UL)
+#define TIM3_BASE           (0x40000400UL)
 
 // Register Structures
 #define RCC                 ((RCC_TypeDef *)RCC_BASE)
@@ -35,6 +36,7 @@
 #define GPIOB               ((GPIO_TypeDef *)GPIOB_BASE)
 #define GPIOC               ((GPIO_TypeDef *)GPIOC_BASE)
 #define I2C1                ((I2C_TypeDef *)I2C1_BASE)
+#define TIM3                ((TIM_TypeDef *)TIM3_BASE)
 
 typedef struct {
     volatile uint32_t CR;           // RCC clock control register,                  offset: 0x00
@@ -79,11 +81,35 @@ typedef struct {
     volatile uint32_t TRISE;        // I2C Rise time register,                     offset: 0x20
 } I2C_TypeDef;
 
+typedef struct {
+    volatile uint32_t CR1;          // TIM Control register 1,                     offset: 0x00
+    volatile uint32_t CR2;          // TIM Control register 2,                     offset: 0x04
+    volatile uint32_t SMCR;         // TIM Slave mode control register,            offset: 0x08
+    volatile uint32_t DIER;         // TIM DMA/interrupt enable register,          offset: 0x0C
+    volatile uint32_t SR;           // TIM Status register,                        offset: 0x10
+    volatile uint32_t EGR;          // TIM Event generation register,              offset: 0x14
+    volatile uint32_t CCMR1;        // TIM Capture/compare mode register 1,        offset: 0x18
+    volatile uint32_t CCMR2;        // TIM Capture/compare mode register 2,        offset: 0x1C
+    volatile uint32_t CCER;         // TIM Capture/compare enable register,        offset: 0x20
+    volatile uint32_t CNT;          // TIM Counter register,                       offset: 0x24
+    volatile uint32_t PSC;          // TIM Prescaler register,                     offset: 0x28
+    volatile uint32_t ARR;          // TIM Auto-reload register,                   offset: 0x2C
+    volatile uint32_t RESERVED1;    // Reserved,                                    offset: 0x30
+    volatile uint32_t CCR1;         // TIM Capture/compare register 1,             offset: 0x34
+    volatile uint32_t CCR2;         // TIM Capture/compare register 2,             offset: 0x38
+    volatile uint32_t CCR3;         // TIM Capture/compare register 3,             offset: 0x3C
+    volatile uint32_t CCR4;         // TIM Capture/compare register 4,             offset: 0x40
+    volatile uint32_t RESERVED2;    // Reserved,                                    offset: 0x44
+    volatile uint32_t DCR;          // TIM DMA control register,                   offset: 0x48
+    volatile uint32_t DMAR;         // TIM DMA address for full transfer,          offset: 0x4C
+} TIM_TypeDef;
+
 // Bit definitions - RCC
 #define RCC_AHB1ENR_GPIOAEN         (1U << 0)   // GPIOA clock enable
 #define RCC_AHB1ENR_GPIOBEN         (1U << 1)   // GPIOB clock enable
 #define RCC_AHB1ENR_GPIOCEN         (1U << 2)   // GPIOC clock enable
 #define RCC_APB1ENR_I2C1EN          (1U << 21)  // I2C1 clock enable
+#define RCC_APB1ENR_TIM3EN          (1U << 1)   // TIM3 clock enable
 
 // Optocoupler pin definitions (PC6-PC9)
 // PC7: optocoupler input-4 : motor-A Forward input
@@ -102,9 +128,16 @@ typedef struct {
 #define GPIO_ODR_OD5                (1U << 5)   // PA5 output data bit
 
 // GPIO alternate function
+#define GPIO_AFR_AF2                (2U)        // Alternate function 2 for TIM3
 #define GPIO_AFR_AF4                (4U)        // Alternate function 4 for I2C1
 #define GPIO_AFR_AFR8_POS           ((8 % 8) * 4)  // PB8 alternate function position
 #define GPIO_AFR_AFR9_POS           ((9 % 8) * 4)  // PB9 alternate function position
+
+// Timer bit definitions
+#define TIM_CR1_CEN                 (1U << 0)   // Counter enable
+#define TIM_CCMR1_OC1M_PWM1         (6U << 4)   // PWM mode 1 for channel 1
+#define TIM_CCMR1_OC1PE             (1U << 3)   // Output compare 1 preload enable
+#define TIM_CCER_CC1E               (1U << 0)   // Capture/compare 1 output enable
 
 // Bit definitions - I2C
 #define I2C_CR1_PE                  (1U << 0)   // Peripheral enable
@@ -233,34 +266,34 @@ void Optocoupler_Set(uint8_t channel)
     }
 }
 
-// Test sequence: Activate each optocoupler channel for 1 second sequentially
+// Test sequence: Activate each optocoupler channel for 0.5 second sequentially
 // Only one channel is active at a time to prevent driver overload
 void Optocoupler_TestSequence(void)
 {
     // Turn off all channels first
     Optocoupler_AllOff();
-    delay_ms(100);
+    delay_ms(50);
     
-    // Test sequence: Each channel active for 1 second
+    // Test sequence: Each channel active for 0.5 second
     // Channel 1: Motor-B reverse (PC8)
     Optocoupler_Set(1);
-    delay_ms(1000);
+    delay_ms(500);
     
     // Channel 2: Motor-B forward (PC6)
     Optocoupler_Set(2);
-    delay_ms(1000);
+    delay_ms(500);
     
     // Channel 3: Motor-A reverse (PC9)
     Optocoupler_Set(3);
-    delay_ms(1000);
+    delay_ms(500);
     
     // Channel 4: Motor-A forward (PC7)
     Optocoupler_Set(4);
-    delay_ms(1000);
+    delay_ms(500);
     
     // Turn off all channels after test
     Optocoupler_AllOff();
-    delay_ms(100);
+    delay_ms(50);
 }
 
 void delay_us(uint32_t us)
@@ -270,6 +303,230 @@ void delay_us(uint32_t us)
     {
         __asm volatile("nop");
     }
+}
+
+// Speaker/PWM Audio Functions
+// PA6 (TIM3 CH1) for speaker output
+
+// Initialize TIM3 for PWM audio on PA6
+void Speaker_Init(void)
+{
+    // Enable clocks
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+    RCC->APB1ENR |= RCC_APB1ENR_TIM3EN;
+    
+    // Configure PA6 as alternate function 2 (TIM3 CH1)
+    GPIOA->MODER &= ~(3U << (6 * 2));           // Clear mode bits
+    GPIOA->MODER |= (2U << (6 * 2));            // Set alternate function mode (10)
+    GPIOA->OTYPER &= ~(1U << 6);                // Push-pull
+    GPIOA->OSPEEDR |= (3U << (6 * 2));          // High speed (maximum drive strength)
+    GPIOA->PUPDR &= ~(3U << (6 * 2));           // No pull-up/pull-down
+    GPIOA->AFR[0] &= ~(0xF << ((6 % 8) * 4));   // Clear AF bits for PA6
+    GPIOA->AFR[0] |= (GPIO_AFR_AF2 << ((6 % 8) * 4));  // Set AF2 for TIM3
+    
+    // Configure TIM3 for PWM
+    // For audio: We'll set frequency dynamically, but setup the timer structure
+    // APB1 timer clock = APB1 * 2 if APB1 prescaler > 1, else APB1
+    // With HSI at 16MHz, APB1 typically = 16MHz, so timer clock = 16MHz
+    
+    TIM3->CR1 = 0;                              // Reset control register
+    TIM3->PSC = 0;                              // Prescaler = 1 (no prescaling)
+    TIM3->ARR = 1000;                           // Auto-reload (will be set for frequency)
+    TIM3->CCR1 = 500;                           // Duty cycle 50% (will be updated)
+    TIM3->CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;  // PWM mode 1, preload enable
+    TIM3->CCER = TIM_CCER_CC1E;                 // Enable channel 1 output
+    TIM3->CR1 |= TIM_CR1_CEN;                   // Enable counter
+    
+    // Initially stop sound (set frequency to 0 or very low)
+    Speaker_SetFrequency(0);
+}
+
+// Set PWM frequency (for playing notes)
+// frequency: frequency in Hz (0 = stop sound)
+void Speaker_SetFrequency(uint32_t frequency)
+{
+    if (frequency == 0 || frequency > 20000)
+    {
+        // Stop sound: disable output
+        TIM3->CCER &= ~TIM_CCER_CC1E;
+        return;
+    }
+    
+    // Enable output
+    TIM3->CCER |= TIM_CCER_CC1E;
+    
+    // Timer clock is 16MHz (assuming APB1 = 16MHz, no prescaler)
+    // For PWM frequency F: ARR = Timer_Clock / F
+    // We want good resolution, so use prescaler to get reasonable ARR values
+    
+    uint32_t timer_clock = 16000000;  // 16 MHz
+    uint32_t target_arr = 2000;       // Target ARR for good resolution
+    
+    // Calculate prescaler
+    uint32_t prescaler = (timer_clock / (frequency * target_arr)) - 1;
+    if (prescaler > 65535) prescaler = 65535;
+    
+    // Calculate actual ARR
+    uint32_t arr = (timer_clock / ((prescaler + 1) * frequency));
+    
+    TIM3->PSC = prescaler;
+    TIM3->ARR = arr;
+    TIM3->CCR1 = (arr * 3) / 5;  // 60% duty cycle for increased volume
+}
+
+// Stop sound
+void Speaker_Stop(void)
+{
+    TIM3->CCER &= ~TIM_CCER_CC1E;
+}
+
+// Musical note frequencies (4th octave)
+#define NOTE_REST    0
+#define NOTE_C4      262
+#define NOTE_CS4     277
+#define NOTE_D4      294
+#define NOTE_DS4     311
+#define NOTE_E4      330
+#define NOTE_F4      349
+#define NOTE_FS4     370
+#define NOTE_G4      392
+#define NOTE_GS4     415
+#define NOTE_A4      440
+#define NOTE_AS4     466
+#define NOTE_B4      494
+
+// 5th octave
+#define NOTE_C5      523
+#define NOTE_CS5     554
+#define NOTE_D5      587
+#define NOTE_DS5     622
+#define NOTE_E5      659
+#define NOTE_F5      698
+#define NOTE_FS5     740
+#define NOTE_G5      784
+#define NOTE_GS5     831
+#define NOTE_A5      880
+#define NOTE_AS5     932
+#define NOTE_B5      988
+
+// 6th octave
+#define NOTE_C6      1047
+#define NOTE_D6      1175
+#define NOTE_E6      1319
+#define NOTE_F6      1397
+#define NOTE_G6      1568
+#define NOTE_A6      1760
+
+// Note duration types (doubled speed - halved durations)
+#define DURATION_WHOLE    800
+#define DURATION_HALF     400
+#define DURATION_QUARTER  200
+#define DURATION_EIGHTH   100
+#define DURATION_SIXTEENTH 50
+
+// Structure for melody notes
+typedef struct {
+    uint32_t frequency;
+    uint32_t duration_ms;
+} MelodyNote_t;
+
+// Katyusha melody (first verse, simplified)
+// Based on the Russian folk song "Katyusha"
+static const MelodyNote_t katusha_melody[] = {
+    // First phrase: "Расцветали яблони и груши"
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_G4, DURATION_QUARTER},
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_C5, DURATION_QUARTER},
+    
+    {NOTE_B4, DURATION_QUARTER},
+    {NOTE_G4, DURATION_QUARTER},
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_D4, DURATION_QUARTER},
+    
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_G4, DURATION_QUARTER},
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_C5, DURATION_QUARTER},
+    
+    {NOTE_B4, DURATION_HALF},
+    {NOTE_REST, DURATION_QUARTER},
+    
+    // Second phrase: "Поплыли туманы над рекой"
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_G4, DURATION_QUARTER},
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_C5, DURATION_QUARTER},
+    
+    {NOTE_B4, DURATION_QUARTER},
+    {NOTE_G4, DURATION_QUARTER},
+    {NOTE_B4, DURATION_QUARTER},
+    {NOTE_C5, DURATION_QUARTER},
+    
+    {NOTE_D5, DURATION_QUARTER},
+    {NOTE_C5, DURATION_QUARTER},
+    {NOTE_B4, DURATION_QUARTER},
+    {NOTE_G4, DURATION_QUARTER},
+    
+    {NOTE_E4, DURATION_HALF},
+    {NOTE_REST, DURATION_QUARTER},
+    
+    // Third phrase: "Выходила на берег Катюша"
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_G4, DURATION_QUARTER},
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_C5, DURATION_QUARTER},
+    
+    {NOTE_B4, DURATION_QUARTER},
+    {NOTE_G4, DURATION_QUARTER},
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_D4, DURATION_QUARTER},
+    
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_G4, DURATION_QUARTER},
+    {NOTE_B4, DURATION_QUARTER},
+    {NOTE_C5, DURATION_QUARTER},
+    
+    {NOTE_D5, DURATION_QUARTER},
+    {NOTE_E5, DURATION_QUARTER},
+    {NOTE_C5, DURATION_HALF},
+    
+    // Final phrase
+    {NOTE_B4, DURATION_QUARTER},
+    {NOTE_G4, DURATION_QUARTER},
+    {NOTE_E4, DURATION_QUARTER},
+    {NOTE_D4, DURATION_QUARTER},
+    
+    {NOTE_E4, DURATION_HALF},
+    {NOTE_REST, DURATION_QUARTER},
+    {NOTE_REST, DURATION_QUARTER},
+};
+
+#define KATYUSHA_MELODY_LENGTH  (sizeof(katusha_melody) / sizeof(MelodyNote_t))
+
+// Play the Katyusha melody
+void Play_Katyusha(void)
+{
+    Speaker_Init();
+    delay_ms(10);
+    
+    for (uint32_t i = 0; i < KATYUSHA_MELODY_LENGTH; i++)
+    {
+        if (katusha_melody[i].frequency == NOTE_REST)
+        {
+            Speaker_Stop();
+        }
+        else
+        {
+            Speaker_SetFrequency(katusha_melody[i].frequency);
+        }
+        
+        delay_ms(katusha_melody[i].duration_ms);
+    }
+    
+    // Stop sound after melody
+    Speaker_Stop();
+    delay_ms(100);
 }
 
 // I2C1 Initialization - PB8 (SCL) and PB9 (SDA), Alternate Function 4
@@ -762,6 +1019,9 @@ int main(void)
     // This tests each channel individually for 1 second
     Optocoupler_TestSequence();
     
+    // Play Katyusha melody test (before LCD initialization)
+    Play_Katyusha();
+    
     // Initialize I2C1 for LCD
     I2C1_Init();
     
@@ -838,8 +1098,8 @@ int main(void)
             lcd_data((uint8_t)c);
             col++;
             
-            // Small delay for readability (30ms per character)
-            delay_ms(30);
+            // Small delay for readability (15ms per character - doubled speed)
+            delay_ms(15);
         }
         
         // Brief pause before restarting the story
