@@ -6,7 +6,7 @@
  ******************************************************************************
  * @attention
  *
- * Copyright (c) 2025 STMicroelectronics.
+ * Copyright (c) 2025 Traiano G. Welcome traiano@gmail.com
  * All rights reserved.
  *
  * This software is licensed under terms that can be found in the LICENSE file
@@ -120,6 +120,13 @@ typedef struct {
 #define OPTOC_PC7           (7)   // Motor-A forward
 #define OPTOC_PC8           (8)   // Motor-B forward
 #define OPTOC_PC9           (9)   // Motor-A reverse
+
+// LED strobe pin definitions (PC0-PC3)
+// These pins are free and do not conflict with UART/USART functions
+#define LED_STROBE_PC0      (0)   // Strobe LED 1
+#define LED_STROBE_PC1      (1)   // Strobe LED 2
+#define LED_STROBE_PC2      (2)   // Strobe LED 3
+#define LED_STROBE_PC3      (3)   // Strobe LED 4
 
 // Bit definitions - GPIO
 #define GPIO_MODER_MODER5_POS       (5 * 2)     // PA5 mode register position
@@ -266,33 +273,112 @@ void Optocoupler_Set(uint8_t channel)
     }
 }
 
+// LED Strobe control functions
+// Initialize LED strobe GPIO pins (PC0, PC1, PC2, PC3)
+void LED_Strobe_Init(void)
+{
+    // GPIOC clock should already be enabled by Optocoupler_Init, but ensure it's on
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
+    
+    // Configure PC0, PC1, PC2, PC3 as outputs
+    // PC0 - Strobe LED 1
+    GPIOC->MODER &= ~(3U << (LED_STROBE_PC0 * 2));
+    GPIOC->MODER |= (1U << (LED_STROBE_PC0 * 2));      // Output mode
+    GPIOC->OTYPER &= ~(1U << LED_STROBE_PC0);          // Push-pull
+    GPIOC->OSPEEDR |= (1U << (LED_STROBE_PC0 * 2));    // Medium speed
+    GPIOC->PUPDR &= ~(3U << (LED_STROBE_PC0 * 2));     // No pull-up/pull-down
+    
+    // PC1 - Strobe LED 2
+    GPIOC->MODER &= ~(3U << (LED_STROBE_PC1 * 2));
+    GPIOC->MODER |= (1U << (LED_STROBE_PC1 * 2));      // Output mode
+    GPIOC->OTYPER &= ~(1U << LED_STROBE_PC1);           // Push-pull
+    GPIOC->OSPEEDR |= (1U << (LED_STROBE_PC1 * 2));     // Medium speed
+    GPIOC->PUPDR &= ~(3U << (LED_STROBE_PC1 * 2));     // No pull-up/pull-down
+    
+    // PC2 - Strobe LED 3
+    GPIOC->MODER &= ~(3U << (LED_STROBE_PC2 * 2));
+    GPIOC->MODER |= (1U << (LED_STROBE_PC2 * 2));      // Output mode
+    GPIOC->OTYPER &= ~(1U << LED_STROBE_PC2);           // Push-pull
+    GPIOC->OSPEEDR |= (1U << (LED_STROBE_PC2 * 2));     // Medium speed
+    GPIOC->PUPDR &= ~(3U << (LED_STROBE_PC2 * 2));      // No pull-up/pull-down
+    
+    // PC3 - Strobe LED 4
+    GPIOC->MODER &= ~(3U << (LED_STROBE_PC3 * 2));
+    GPIOC->MODER |= (1U << (LED_STROBE_PC3 * 2));      // Output mode
+    GPIOC->OTYPER &= ~(1U << LED_STROBE_PC3);           // Push-pull
+    GPIOC->OSPEEDR |= (1U << (LED_STROBE_PC3 * 2));     // Medium speed
+    GPIOC->PUPDR &= ~(3U << (LED_STROBE_PC3 * 2));      // No pull-up/pull-down
+    
+    // Ensure all LEDs are OFF initially
+    LED_Strobe_AllOff();
+}
+
+// Turn off all strobe LEDs
+void LED_Strobe_AllOff(void)
+{
+    // Clear PC0, PC1, PC2, PC3 (set to LOW)
+    GPIOC->BSRR = (1U << (LED_STROBE_PC0 + 16));  // Reset PC0
+    GPIOC->BSRR = (1U << (LED_STROBE_PC1 + 16));  // Reset PC1
+    GPIOC->BSRR = (1U << (LED_STROBE_PC2 + 16));  // Reset PC2
+    GPIOC->BSRR = (1U << (LED_STROBE_PC3 + 16));  // Reset PC3
+}
+
+// Turn on all strobe LEDs
+void LED_Strobe_AllOn(void)
+{
+    // Set PC0, PC1, PC2, PC3 (set to HIGH)
+    GPIOC->BSRR = (1U << LED_STROBE_PC0);  // Set PC0 HIGH
+    GPIOC->BSRR = (1U << LED_STROBE_PC1);  // Set PC1 HIGH
+    GPIOC->BSRR = (1U << LED_STROBE_PC2);  // Set PC2 HIGH
+    GPIOC->BSRR = (1U << LED_STROBE_PC3);  // Set PC3 HIGH
+}
+
+// Strobe effect: flash all LEDs rapidly
+void LED_Strobe_Flash(uint32_t duration_ms, uint32_t flash_rate_ms)
+{
+    uint32_t end_time = duration_ms;
+    uint32_t elapsed = 0;
+    
+    while (elapsed < end_time)
+    {
+        LED_Strobe_AllOn();
+        delay_ms(flash_rate_ms);
+        LED_Strobe_AllOff();
+        delay_ms(flash_rate_ms);
+        elapsed += (flash_rate_ms * 2);
+    }
+}
+
 // Test sequence: Activate each optocoupler channel for 0.5 second sequentially
 // Only one channel is active at a time to prevent driver overload
+// LEDs strobe during the entire test sequence
 void Optocoupler_TestSequence(void)
 {
     // Turn off all channels first
     Optocoupler_AllOff();
+    LED_Strobe_AllOff();
     delay_ms(50);
     
-    // Test sequence: Each channel active for 0.5 second
+    // Test sequence: Each channel active for 0.5 second with strobe effect
     // Channel 1: Motor-B reverse (PC8)
     Optocoupler_Set(1);
-    delay_ms(500);
+    LED_Strobe_Flash(500, 50);  // Strobe for 500ms with 50ms flash rate
     
     // Channel 2: Motor-B forward (PC6)
     Optocoupler_Set(2);
-    delay_ms(500);
+    LED_Strobe_Flash(500, 50);  // Strobe for 500ms with 50ms flash rate
     
     // Channel 3: Motor-A reverse (PC9)
     Optocoupler_Set(3);
-    delay_ms(500);
+    LED_Strobe_Flash(500, 50);  // Strobe for 500ms with 50ms flash rate
     
     // Channel 4: Motor-A forward (PC7)
     Optocoupler_Set(4);
-    delay_ms(500);
+    LED_Strobe_Flash(500, 50);  // Strobe for 500ms with 50ms flash rate
     
-    // Turn off all channels after test
+    // Turn off all channels and LEDs after test
     Optocoupler_AllOff();
+    LED_Strobe_AllOff();
     delay_ms(50);
 }
 
@@ -1015,8 +1101,11 @@ int main(void)
     // Initialize optocoupler GPIO pins
     Optocoupler_Init();
     
+    // Initialize LED strobe GPIO pins (PC0-PC3)
+    LED_Strobe_Init();
+    
     // Run optocoupler test sequence (before LCD initialization)
-    // This tests each channel individually for 1 second
+    // This tests each channel individually for 0.5 second with strobe effect
     Optocoupler_TestSequence();
     
     // Play Katyusha melody test (before LCD initialization)

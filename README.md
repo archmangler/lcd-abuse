@@ -300,8 +300,8 @@ Potential improvements:
 
 ## License
 
-Copyright (c) 2025 STMicroelectronics.
-This software is provided AS-IS per STMicroelectronics licensing terms.
+Copyright (c) 2025 T.G Welcome traiano@gmail.com
+This software is provided AS-IS per the author's licensing terms.
 
 ## References
 
