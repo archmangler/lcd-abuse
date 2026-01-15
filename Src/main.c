@@ -498,122 +498,176 @@ void SoundEffect_AlertBeep(void)
     HBridge_Opto_Off();
 }
 
-// Voice synthesis: Generate vowel-like sound using formant frequencies
-// Human speech uses formants (F1, F2, F3) - characteristic frequency bands
-// This function approximates vowels by mixing frequencies
-void Voice_GenerateVowel(uint32_t f1, uint32_t f2, uint32_t duration_ms)
+// Voice synthesis using H-bridge sound hardware (PB13/PB14)
+// Uses improved formant synthesis with proper amplitude modulation
+
+// Generate vowel with formant synthesis using H-bridge
+// f1, f2: formant frequencies, pitch: base pitch, duration_ms: duration
+// Uses frequency modulation to create formant structure
+void Voice_GenerateVowel_PWM(uint32_t f1, uint32_t f2, uint32_t pitch, uint32_t duration_ms)
 {
-    // Mix two formants to create vowel-like sound
-    // Alternate between formants rapidly to create complex waveform
-    uint32_t cycles = duration_ms / 2;  // 2ms per cycle (500 Hz modulation)
+    // Real formant synthesis requires simultaneous frequencies, but we can approximate
+    // by using the fundamental pitch and adding formant characteristics through modulation
+    
+    // Create formant structure by modulating between pitch and formant frequencies
+    // This creates amplitude modulation that approximates formants
+    uint32_t cycles = duration_ms / 4;  // 4ms cycles for smoother modulation
     
     for (uint32_t i = 0; i < cycles; i++)
     {
-        // Alternate between F1 and F2 to create formant structure
+        // Cycle through: pitch -> F1 emphasis -> pitch -> F2 emphasis
+        // This creates the formant structure
+        
+        // Fundamental pitch (50% of time)
+        HBridge_GenerateTone(pitch, 1);
+        
+        // F1 emphasis - slightly lower than pitch to emphasize first formant
+        uint32_t f1_emph = pitch - ((pitch - f1) / 4);
+        if (f1_emph < 80) f1_emph = 80;
+        HBridge_GenerateTone(f1_emph, 1);
+        
+        // Back to pitch
+        HBridge_GenerateTone(pitch, 1);
+        
+        // F2 emphasis - add higher frequency component
+        uint32_t f2_emph = pitch + ((f2 - pitch) / 6);
+        if (f2_emph > 4000) f2_emph = 4000;
+        HBridge_GenerateTone(f2_emph, 1);
+    }
+}
+
+// Generate vowel with pitch sweep (for diphthongs and natural transitions)
+void Voice_GenerateVowel_Sweep(uint32_t f1_start, uint32_t f2_start, uint32_t f1_end, uint32_t f2_end, 
+                                uint32_t pitch_start, uint32_t pitch_end, uint32_t duration_ms)
+{
+    uint32_t steps = duration_ms / 5;  // 5ms steps
+    
+    for (uint32_t i = 0; i <= steps; i++)
+    {
+        // Interpolate formants and pitch
+        uint32_t f1 = f1_start + ((f1_end - f1_start) * i / steps);
+        uint32_t f2 = f2_start + ((f2_end - f2_start) * i / steps);
+        uint32_t pitch = pitch_start + ((pitch_end - pitch_start) * i / steps);
+        
+        // Generate short vowel segment
+        HBridge_GenerateTone(pitch, 2);
         HBridge_GenerateTone(f1, 1);
+        HBridge_GenerateTone(pitch, 1);
         HBridge_GenerateTone(f2, 1);
     }
 }
 
-// Voice synthesis: Generate consonant-like sound
-void Voice_GenerateConsonant(uint32_t frequency, uint32_t duration_ms)
+// Generate consonant using H-bridge
+void Voice_GenerateConsonant_PWM(uint32_t frequency, uint32_t duration_ms)
 {
-    // Consonants are typically shorter and have specific frequencies
     HBridge_GenerateTone(frequency, duration_ms);
 }
 
+// Generate silence/pause
+void Voice_Silence(uint32_t duration_ms)
+{
+    HBridge_Opto_Off();
+    delay_ms(duration_ms);
+}
+
 // Voice announcement: "Escape from Planet Metroid"
-// Uses formant-based synthesis to approximate human speech
+// Uses improved formant-based synthesis with H-bridge sound hardware (PB13/PB14)
+// Includes pitch variation and proper timing for more natural speech
 void Voice_AnnounceTitle(void)
 {
+    // H-bridge should already be initialized, but ensure it's ready
+    HBridge_Opto_Off();
+    
     // "Escape" - E-S-K-AY-P
-    // E (as in "see"): F1=300, F2=2300
-    Voice_GenerateVowel(300, 2300, 80);
-    delay_ms(20);
+    // E (as in "see"): F1=300, F2=2300, pitch=150Hz
+    Voice_GenerateVowel_PWM(300, 2300, 150, 100);
+    Voice_Silence(15);
     
     // S (fricative): high frequency noise-like
-    Voice_GenerateConsonant(6000, 40);
-    delay_ms(10);
+    Voice_GenerateConsonant_PWM(4000, 50);
+    Voice_Silence(10);
     
     // K (stop): brief silence then burst
-    delay_ms(10);
-    Voice_GenerateConsonant(2000, 15);
-    delay_ms(5);
+    Voice_Silence(10);
+    Voice_GenerateConsonant_PWM(2200, 20);
+    Voice_Silence(5);
     
-    // AY (as in "say"): F1=700, F2=1200
-    Voice_GenerateVowel(700, 1200, 100);
-    delay_ms(20);
+    // AY (as in "say"): F1=700, F2=1200, pitch=180Hz (rising pitch)
+    Voice_GenerateVowel_PWM(700, 1200, 180, 120);
+    Voice_Silence(15);
     
     // P (stop): brief burst
-    Voice_GenerateConsonant(1500, 20);
-    delay_ms(30);
+    Voice_GenerateConsonant_PWM(1800, 25);
+    Voice_Silence(40);
     
     // "from" - F-R-AH-M
     // F (fricative): high frequency
-    Voice_GenerateConsonant(4000, 30);
-    delay_ms(10);
+    Voice_GenerateConsonant_PWM(3500, 40);
+    Voice_Silence(8);
     
-    // R (approximant): F1=400, F2=1200
-    Voice_GenerateVowel(400, 1200, 60);
-    delay_ms(10);
+    // R (approximant): F1=400, F2=1200, pitch=160Hz
+    Voice_GenerateVowel_PWM(400, 1200, 160, 70);
+    Voice_Silence(8);
     
-    // AH (as in "father"): F1=700, F2=1100
-    Voice_GenerateVowel(700, 1100, 80);
-    delay_ms(20);
+    // AH (as in "father"): F1=700, F2=1100, pitch=140Hz
+    Voice_GenerateVowel_PWM(700, 1100, 140, 90);
+    Voice_Silence(15);
     
-    // M (nasal): F1=300, F2=1200
-    Voice_GenerateVowel(300, 1200, 60);
-    delay_ms(40);
+    // M (nasal): F1=300, F2=1200, pitch=130Hz
+    Voice_GenerateVowel_PWM(300, 1200, 130, 70);
+    Voice_Silence(50);
     
     // "Planet" - P-L-AE-N-EH-T
     // P (stop)
-    Voice_GenerateConsonant(1500, 20);
-    delay_ms(10);
+    Voice_GenerateConsonant_PWM(1600, 25);
+    Voice_Silence(8);
     
-    // L (lateral): F1=400, F2=1200
-    Voice_GenerateVowel(400, 1200, 50);
-    delay_ms(10);
+    // L (lateral): F1=400, F2=1200, pitch=150Hz
+    Voice_GenerateVowel_PWM(400, 1200, 150, 60);
+    Voice_Silence(8);
     
-    // AE (as in "cat"): F1=700, F2=1800
-    Voice_GenerateVowel(700, 1800, 80);
-    delay_ms(20);
+    // AE (as in "cat"): F1=700, F2=1800, pitch=170Hz
+    Voice_GenerateVowel_PWM(700, 1800, 170, 100);
+    Voice_Silence(15);
     
-    // N (nasal): F1=400, F2=1200
-    Voice_GenerateVowel(400, 1200, 50);
-    delay_ms(10);
+    // N (nasal): F1=400, F2=1200, pitch=150Hz
+    Voice_GenerateVowel_PWM(400, 1200, 150, 60);
+    Voice_Silence(8);
     
-    // EH (as in "bed"): F1=600, F2=1900
-    Voice_GenerateVowel(600, 1900, 60);
-    delay_ms(20);
+    // EH (as in "bed"): F1=600, F2=1900, pitch=160Hz
+    Voice_GenerateVowel_PWM(600, 1900, 160, 70);
+    Voice_Silence(15);
     
     // T (stop)
-    Voice_GenerateConsonant(2000, 20);
-    delay_ms(50);
+    Voice_GenerateConsonant_PWM(2100, 25);
+    Voice_Silence(60);
     
     // "Metroid" - M-EH-T-R-OY-D
-    // M (nasal)
-    Voice_GenerateVowel(300, 1200, 60);
-    delay_ms(10);
+    // M (nasal): F1=300, F2=1200, pitch=140Hz
+    Voice_GenerateVowel_PWM(300, 1200, 140, 70);
+    Voice_Silence(8);
     
-    // EH
-    Voice_GenerateVowel(600, 1900, 70);
-    delay_ms(20);
+    // EH: F1=600, F2=1900, pitch=150Hz
+    Voice_GenerateVowel_PWM(600, 1900, 150, 80);
+    Voice_Silence(15);
     
     // T
-    Voice_GenerateConsonant(2000, 20);
-    delay_ms(10);
+    Voice_GenerateConsonant_PWM(2000, 25);
+    Voice_Silence(8);
     
-    // R
-    Voice_GenerateVowel(400, 1200, 50);
-    delay_ms(10);
+    // R: F1=400, F2=1200, pitch=145Hz
+    Voice_GenerateVowel_PWM(400, 1200, 145, 60);
+    Voice_Silence(8);
     
-    // OY (as in "boy"): F1=500, F2=900
-    Voice_GenerateVowel(500, 900, 100);
-    delay_ms(20);
+    // OY (as in "boy"): Diphthong - smooth transition from O to Y
+    Voice_GenerateVowel_Sweep(500, 900, 300, 2200, 140, 160, 110);
+    Voice_Silence(15);
     
     // D (stop)
-    Voice_GenerateConsonant(1800, 20);
-    delay_ms(30);
+    Voice_GenerateConsonant_PWM(1900, 25);
+    Voice_Silence(30);
+    
+    HBridge_Opto_Off();
 }
 
 // Announce title three times with pauses
