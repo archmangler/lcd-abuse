@@ -128,6 +128,11 @@ typedef struct {
 #define LED_STROBE_PC2      (2)   // Strobe LED 3
 #define LED_STROBE_PC3      (3)   // Strobe LED 4
 
+// Solenoid optocoupler LED pin definition (PC4)
+// This LED drives an optocoupler which controls 3V solenoids
+// Pulses after every 3 sentences in the story
+#define SOLENOID_OPTO_PC4   (4)   // Solenoid optocoupler LED
+
 // Bit definitions - GPIO
 #define GPIO_MODER_MODER5_POS       (5 * 2)     // PA5 mode register position
 #define GPIO_MODER_MODER5_MASK      (3U << GPIO_MODER_MODER5_POS)
@@ -271,6 +276,45 @@ void Optocoupler_Set(uint8_t channel)
             // Invalid channel, do nothing (all remain off)
             break;
     }
+}
+
+// Solenoid Optocoupler LED control functions
+// Initialize solenoid optocoupler LED GPIO pin (PC4)
+void Solenoid_Opto_Init(void)
+{
+    // GPIOC clock should already be enabled, but ensure it's on
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
+    
+    // Configure PC4 as output
+    GPIOC->MODER &= ~(3U << (SOLENOID_OPTO_PC4 * 2));
+    GPIOC->MODER |= (1U << (SOLENOID_OPTO_PC4 * 2));      // Output mode
+    GPIOC->OTYPER &= ~(1U << SOLENOID_OPTO_PC4);          // Push-pull
+    GPIOC->OSPEEDR |= (1U << (SOLENOID_OPTO_PC4 * 2));    // Medium speed
+    GPIOC->PUPDR &= ~(3U << (SOLENOID_OPTO_PC4 * 2));     // No pull-up/pull-down
+    
+    // Ensure solenoid optocoupler LED is OFF initially
+    Solenoid_Opto_Off();
+}
+
+// Turn off solenoid optocoupler LED
+void Solenoid_Opto_Off(void)
+{
+    GPIOC->BSRR = (1U << (SOLENOID_OPTO_PC4 + 16));  // Reset PC4 (LOW)
+}
+
+// Turn on solenoid optocoupler LED
+void Solenoid_Opto_On(void)
+{
+    GPIOC->BSRR = (1U << SOLENOID_OPTO_PC4);  // Set PC4 HIGH
+}
+
+// Pulse solenoid optocoupler LED (activates solenoids)
+// duration_ms: pulse duration in milliseconds
+void Solenoid_Opto_Pulse(uint32_t duration_ms)
+{
+    Solenoid_Opto_On();
+    delay_ms(duration_ms);
+    Solenoid_Opto_Off();
 }
 
 // LED Strobe control functions
@@ -466,6 +510,27 @@ void Speaker_Stop(void)
     TIM3->CCER &= ~TIM_CCER_CC1E;
 }
 
+// Radio Teletype (RTTY) sound effect - plays a two-tone FSK pattern
+// This creates the classic radio teletype "chirp" sound
+// Uses mark and space tones typical of RTTY systems
+void Teletype_Click(void)
+{
+    // Radio Teletype uses two-tone frequency shift keying (FSK)
+    // Mark tone: ~2125 Hz, Space tone: ~2295 Hz (common RTTY frequencies)
+    // For a brief character sound, alternate between tones quickly
+    
+    // Play mark tone (2125 Hz) for 0.25ms
+    Speaker_SetFrequency(2125);
+    delay_us(250);
+    
+    // Play space tone (2295 Hz) for 0.25ms
+    Speaker_SetFrequency(2295);
+    delay_us(250);
+    
+    // Total duration: 0.5ms (same as before)
+    Speaker_Stop();
+}
+
 // Musical note frequencies (4th octave)
 #define NOTE_REST    0
 #define NOTE_C4      262
@@ -503,12 +568,12 @@ void Speaker_Stop(void)
 #define NOTE_G6      1568
 #define NOTE_A6      1760
 
-// Note duration types (doubled speed - halved durations)
-#define DURATION_WHOLE    800
-#define DURATION_HALF     400
-#define DURATION_QUARTER  200
-#define DURATION_EIGHTH   100
-#define DURATION_SIXTEENTH 50
+// Note duration types (8x speed - halved durations again for modern attention spans)
+#define DURATION_WHOLE    200
+#define DURATION_HALF     100
+#define DURATION_QUARTER  50
+#define DURATION_EIGHTH   25
+#define DURATION_SIXTEENTH 12
 
 // Structure for melody notes
 typedef struct {
@@ -1104,6 +1169,9 @@ int main(void)
     // Initialize LED strobe GPIO pins (PC0-PC3)
     LED_Strobe_Init();
     
+    // Initialize solenoid optocoupler LED (PC4)
+    Solenoid_Opto_Init();
+    
     // Run optocoupler test sequence (before LCD initialization)
     // This tests each channel individually for 0.5 second with strobe effect
     Optocoupler_TestSequence();
@@ -1119,6 +1187,10 @@ int main(void)
     lcd_init();
     delay_ms(10);
     
+    // Ensure speaker is initialized for teletype sound effects
+    // (Already initialized by Play_Katyusha, but ensure it's ready)
+    Speaker_Init();
+    
     // Clear display
     lcd_clear();
     
@@ -1127,10 +1199,11 @@ int main(void)
     while (1)
     {
         // Stream the story text continuously
-        // Character delay of ~30ms provides readable scrolling speed
+        // Character delay of ~7ms provides fast scrolling speed for children
         const char *text_ptr = story_text;
         uint8_t row = 0;
         uint8_t col = 0;
+        uint32_t sentence_count = 0;  // Track number of sentences printed
         
         while (*text_ptr)
         {
@@ -1138,7 +1211,7 @@ int main(void)
             
             // Toggle LED heartbeat approximately every 500ms
             heartbeat_counter++;
-            if (heartbeat_counter >= 17) // ~500ms at 30ms per char (500/30 ≈ 17)
+            if (heartbeat_counter >= 71) // ~500ms at 7ms per char (500/7 ≈ 71)
             {
                 GPIOA->ODR ^= GPIO_ODR_OD5;
                 heartbeat_counter = 0;
@@ -1161,7 +1234,7 @@ int main(void)
                     lcd_clear();
                     row = 0;
                     col = 0;
-                    delay_ms(500); // Pause before restart
+                    delay_ms(250); // Brief pause before restart (reduced for faster pace)
                 }
                 lcd_set_cursor(row, col);
                 continue;
@@ -1178,7 +1251,7 @@ int main(void)
                     lcd_clear();
                     row = 0;
                     col = 0;
-                    delay_ms(500); // Pause before restart
+                    delay_ms(250); // Brief pause before restart (reduced for faster pace)
                 }
                 lcd_set_cursor(row, col);
             }
@@ -1187,12 +1260,43 @@ int main(void)
             lcd_data((uint8_t)c);
             col++;
             
-            // Small delay for readability (15ms per character - doubled speed)
-            delay_ms(15);
+            // Detect sentence endings: period, exclamation, or question mark
+            // followed by space, newline, or end of text
+            // Check if current character is sentence-ending punctuation
+            if (c == '.' || c == '!' || c == '?')
+            {
+                // Check if next character is space, newline, or end of string
+                char next_char = *text_ptr;
+                if (next_char == ' ' || next_char == '\n' || next_char == '\r' || next_char == '\0')
+                {
+                    sentence_count++;
+                    
+                    // Pulse solenoid optocoupler LED after every 3 sentences
+                    if (sentence_count % 3 == 0)
+                    {
+                        // Pulse for 100ms to activate the solenoids
+                        Solenoid_Opto_Pulse(100);
+                    }
+                }
+            }
+            
+            // Play teletype click sound for each character (except spaces for less noise)
+            // Sound duration is integrated into the character timing
+            if (c != ' ' && c != '\n' && c != '\r')
+            {
+                Teletype_Click();
+                // Delay adjusted for 0.5ms sound duration
+                delay_ms(6);
+            }
+            else
+            {
+                // Normal delay for spaces and newlines (no sound)
+                delay_ms(7);
+            }
         }
         
         // Brief pause before restarting the story
-        delay_ms(2000);
+        delay_ms(1000); // Reduced pause for faster story restart
         lcd_clear();
         row = 0;
         col = 0;
