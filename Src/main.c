@@ -133,6 +133,11 @@ typedef struct {
 // Pulses after every 3 sentences in the story
 #define SOLENOID_OPTO_PC4   (4)   // Solenoid optocoupler LED
 
+// H-Bridge sound effects optocoupler LED pins (PB13, PB14)
+// These LEDs drive optocouplers which control H-bridge for 8Ω speaker sound effects
+#define HBRIDGE_OPTO_PB13   (13)   // H-Bridge optocoupler LED 1
+#define HBRIDGE_OPTO_PB14   (14)   // H-Bridge optocoupler LED 2
+
 // Bit definitions - GPIO
 #define GPIO_MODER_MODER5_POS       (5 * 2)     // PA5 mode register position
 #define GPIO_MODER_MODER5_MASK      (3U << GPIO_MODER_MODER5_POS)
@@ -317,6 +322,314 @@ void Solenoid_Opto_Pulse(uint32_t duration_ms)
     Solenoid_Opto_Off();
 }
 
+// H-Bridge Optocoupler LED control functions
+// Initialize H-Bridge optocoupler LED GPIO pins (PB13, PB14)
+void HBridge_Opto_Init(void)
+{
+    // GPIOB clock should already be enabled for I2C1, but ensure it's on
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+    
+    // Configure PB13 as output
+    GPIOB->MODER &= ~(3U << (HBRIDGE_OPTO_PB13 * 2));
+    GPIOB->MODER |= (1U << (HBRIDGE_OPTO_PB13 * 2));      // Output mode
+    GPIOB->OTYPER &= ~(1U << HBRIDGE_OPTO_PB13);          // Push-pull
+    GPIOB->OSPEEDR |= (1U << (HBRIDGE_OPTO_PB13 * 2));    // Medium speed
+    GPIOB->PUPDR &= ~(3U << (HBRIDGE_OPTO_PB13 * 2));     // No pull-up/pull-down
+    
+    // Configure PB14 as output
+    GPIOB->MODER &= ~(3U << (HBRIDGE_OPTO_PB14 * 2));
+    GPIOB->MODER |= (1U << (HBRIDGE_OPTO_PB14 * 2));      // Output mode
+    GPIOB->OTYPER &= ~(1U << HBRIDGE_OPTO_PB14);          // Push-pull
+    GPIOB->OSPEEDR |= (1U << (HBRIDGE_OPTO_PB14 * 2));    // Medium speed
+    GPIOB->PUPDR &= ~(3U << (HBRIDGE_OPTO_PB14 * 2));     // No pull-up/pull-down
+    
+    // Ensure both LEDs are OFF initially
+    HBridge_Opto_Off();
+}
+
+// Turn off both H-Bridge optocoupler LEDs
+void HBridge_Opto_Off(void)
+{
+    GPIOB->BSRR = (1U << (HBRIDGE_OPTO_PB13 + 16));  // Reset PB13 (LOW)
+    GPIOB->BSRR = (1U << (HBRIDGE_OPTO_PB14 + 16));  // Reset PB14 (LOW)
+}
+
+// Turn on PB13 optocoupler LED
+void HBridge_Opto1_On(void)
+{
+    GPIOB->BSRR = (1U << HBRIDGE_OPTO_PB13);  // Set PB13 HIGH
+}
+
+// Turn off PB13 optocoupler LED
+void HBridge_Opto1_Off(void)
+{
+    GPIOB->BSRR = (1U << (HBRIDGE_OPTO_PB13 + 16));  // Reset PB13 (LOW)
+}
+
+// Turn on PB14 optocoupler LED
+void HBridge_Opto2_On(void)
+{
+    GPIOB->BSRR = (1U << HBRIDGE_OPTO_PB14);  // Set PB14 HIGH
+}
+
+// Turn off PB14 optocoupler LED
+void HBridge_Opto2_Off(void)
+{
+    GPIOB->BSRR = (1U << (HBRIDGE_OPTO_PB14 + 16));  // Reset PB14 (LOW)
+}
+
+// Pulse PB13 optocoupler LED
+void HBridge_Opto1_Pulse(uint32_t duration_ms)
+{
+    HBridge_Opto1_On();
+    delay_ms(duration_ms);
+    HBridge_Opto1_Off();
+}
+
+// Pulse PB14 optocoupler LED
+void HBridge_Opto2_Pulse(uint32_t duration_ms)
+{
+    HBridge_Opto2_On();
+    delay_ms(duration_ms);
+    HBridge_Opto2_Off();
+}
+
+// Software PWM: Generate frequency by toggling pin at specific rate
+// frequency_hz: frequency in Hz, duration_ms: duration in milliseconds
+// Uses PB13 for sound generation
+void HBridge_GenerateTone(uint32_t frequency_hz, uint32_t duration_ms)
+{
+    if (frequency_hz == 0 || frequency_hz > 10000) return;
+    
+    // Calculate period in microseconds
+    uint32_t period_us = 1000000 / frequency_hz;
+    uint32_t half_period_us = period_us / 2;
+    
+    // Calculate number of cycles for duration
+    uint32_t num_cycles = (duration_ms * 1000) / period_us;
+    
+    // Generate square wave by toggling pin
+    for (uint32_t i = 0; i < num_cycles; i++)
+    {
+        HBridge_Opto1_On();
+        delay_us(half_period_us);
+        HBridge_Opto1_Off();
+        delay_us(half_period_us);
+    }
+}
+
+// Sound Effect: Explosion - frequency sweep from high to low
+// Real explosions have a sharp attack, frequency sweep down, and decay
+void SoundEffect_Explosion(void)
+{
+    // Initial sharp "crack" - high frequency burst
+    HBridge_GenerateTone(2500, 10);  // Quick high frequency burst
+    delay_ms(2);
+    
+    // Main explosion: frequency sweep from high to low (2000Hz -> 80Hz)
+    // This creates the characteristic "boom" sound
+    uint32_t start_freq = 2000;
+    uint32_t end_freq = 80;
+    uint32_t steps = 15;  // Number of frequency steps
+    
+    for (uint32_t i = 0; i <= steps; i++)
+    {
+        // Linear frequency decrease
+        uint32_t freq = start_freq - ((start_freq - end_freq) * i / steps);
+        if (freq < 80) freq = 80;
+        
+        // Shorter duration at high frequencies, longer at low (more realistic)
+        uint32_t step_duration = 3 + (i * 2);  // 3ms to 33ms per step
+        
+        HBridge_GenerateTone(freq, step_duration);
+    }
+    
+    // Final low rumble
+    HBridge_GenerateTone(60, 30);
+    
+    HBridge_Opto_Off();
+}
+
+// Sound Effect: Warning Siren - frequency-modulated tone (up and down sweep)
+// Real sirens use frequency modulation between two frequencies
+void SoundEffect_WarningSiren(uint32_t duration_ms)
+{
+    uint32_t low_freq = 800;   // Low frequency (Hz)
+    uint32_t high_freq = 1200; // High frequency (Hz)
+    uint32_t sweep_time = 200;  // Time for one up/down cycle (ms)
+    uint32_t elapsed = 0;
+    
+    while (elapsed < duration_ms)
+    {
+        // Sweep up: low to high frequency
+        uint32_t steps = 20;
+        for (uint32_t i = 0; i <= steps; i++)
+        {
+            uint32_t freq = low_freq + ((high_freq - low_freq) * i / steps);
+            uint32_t step_duration = (sweep_time / 2) / steps;
+            HBridge_GenerateTone(freq, step_duration);
+            elapsed += step_duration;
+            if (elapsed >= duration_ms) break;
+        }
+        
+        if (elapsed >= duration_ms) break;
+        
+        // Sweep down: high to low frequency
+        for (uint32_t i = 0; i <= steps; i++)
+        {
+            uint32_t freq = high_freq - ((high_freq - low_freq) * i / steps);
+            uint32_t step_duration = (sweep_time / 2) / steps;
+            HBridge_GenerateTone(freq, step_duration);
+            elapsed += step_duration;
+            if (elapsed >= duration_ms) break;
+        }
+    }
+    
+    HBridge_Opto_Off();
+}
+
+// Sound Effect: Alert Beep - short beep with frequency
+// Real beeps have a specific frequency (typically 800-1000 Hz)
+void SoundEffect_AlertBeep(void)
+{
+    // Generate 1000 Hz tone for 30ms (more realistic beep)
+    HBridge_GenerateTone(1000, 30);
+    delay_ms(5);  // Brief pause
+    HBridge_Opto_Off();
+}
+
+// Voice synthesis: Generate vowel-like sound using formant frequencies
+// Human speech uses formants (F1, F2, F3) - characteristic frequency bands
+// This function approximates vowels by mixing frequencies
+void Voice_GenerateVowel(uint32_t f1, uint32_t f2, uint32_t duration_ms)
+{
+    // Mix two formants to create vowel-like sound
+    // Alternate between formants rapidly to create complex waveform
+    uint32_t cycles = duration_ms / 2;  // 2ms per cycle (500 Hz modulation)
+    
+    for (uint32_t i = 0; i < cycles; i++)
+    {
+        // Alternate between F1 and F2 to create formant structure
+        HBridge_GenerateTone(f1, 1);
+        HBridge_GenerateTone(f2, 1);
+    }
+}
+
+// Voice synthesis: Generate consonant-like sound
+void Voice_GenerateConsonant(uint32_t frequency, uint32_t duration_ms)
+{
+    // Consonants are typically shorter and have specific frequencies
+    HBridge_GenerateTone(frequency, duration_ms);
+}
+
+// Voice announcement: "Escape from Planet Metroid"
+// Uses formant-based synthesis to approximate human speech
+void Voice_AnnounceTitle(void)
+{
+    // "Escape" - E-S-K-AY-P
+    // E (as in "see"): F1=300, F2=2300
+    Voice_GenerateVowel(300, 2300, 80);
+    delay_ms(20);
+    
+    // S (fricative): high frequency noise-like
+    Voice_GenerateConsonant(6000, 40);
+    delay_ms(10);
+    
+    // K (stop): brief silence then burst
+    delay_ms(10);
+    Voice_GenerateConsonant(2000, 15);
+    delay_ms(5);
+    
+    // AY (as in "say"): F1=700, F2=1200
+    Voice_GenerateVowel(700, 1200, 100);
+    delay_ms(20);
+    
+    // P (stop): brief burst
+    Voice_GenerateConsonant(1500, 20);
+    delay_ms(30);
+    
+    // "from" - F-R-AH-M
+    // F (fricative): high frequency
+    Voice_GenerateConsonant(4000, 30);
+    delay_ms(10);
+    
+    // R (approximant): F1=400, F2=1200
+    Voice_GenerateVowel(400, 1200, 60);
+    delay_ms(10);
+    
+    // AH (as in "father"): F1=700, F2=1100
+    Voice_GenerateVowel(700, 1100, 80);
+    delay_ms(20);
+    
+    // M (nasal): F1=300, F2=1200
+    Voice_GenerateVowel(300, 1200, 60);
+    delay_ms(40);
+    
+    // "Planet" - P-L-AE-N-EH-T
+    // P (stop)
+    Voice_GenerateConsonant(1500, 20);
+    delay_ms(10);
+    
+    // L (lateral): F1=400, F2=1200
+    Voice_GenerateVowel(400, 1200, 50);
+    delay_ms(10);
+    
+    // AE (as in "cat"): F1=700, F2=1800
+    Voice_GenerateVowel(700, 1800, 80);
+    delay_ms(20);
+    
+    // N (nasal): F1=400, F2=1200
+    Voice_GenerateVowel(400, 1200, 50);
+    delay_ms(10);
+    
+    // EH (as in "bed"): F1=600, F2=1900
+    Voice_GenerateVowel(600, 1900, 60);
+    delay_ms(20);
+    
+    // T (stop)
+    Voice_GenerateConsonant(2000, 20);
+    delay_ms(50);
+    
+    // "Metroid" - M-EH-T-R-OY-D
+    // M (nasal)
+    Voice_GenerateVowel(300, 1200, 60);
+    delay_ms(10);
+    
+    // EH
+    Voice_GenerateVowel(600, 1900, 70);
+    delay_ms(20);
+    
+    // T
+    Voice_GenerateConsonant(2000, 20);
+    delay_ms(10);
+    
+    // R
+    Voice_GenerateVowel(400, 1200, 50);
+    delay_ms(10);
+    
+    // OY (as in "boy"): F1=500, F2=900
+    Voice_GenerateVowel(500, 900, 100);
+    delay_ms(20);
+    
+    // D (stop)
+    Voice_GenerateConsonant(1800, 20);
+    delay_ms(30);
+}
+
+// Announce title three times with pauses
+void Voice_AnnounceTitle_ThreeTimes(void)
+{
+    for (uint8_t i = 0; i < 3; i++)
+    {
+        Voice_AnnounceTitle();
+        if (i < 2)  // Don't delay after last announcement
+        {
+            delay_ms(500);  // Pause between announcements
+        }
+    }
+    HBridge_Opto_Off();
+}
+
 // LED Strobe control functions
 // Initialize LED strobe GPIO pins (PC0, PC1, PC2, PC3)
 void LED_Strobe_Init(void)
@@ -408,11 +721,13 @@ void Optocoupler_TestSequence(void)
     Optocoupler_Set(1);
     LED_Strobe_Flash(500, 50);  // Strobe for 500ms with 50ms flash rate
     
-    // Channel 2: Motor-B forward (PC6)
+    // Channel 2: Motor-B forward (PC6) - Alert beep before pulse
+    SoundEffect_AlertBeep();
     Optocoupler_Set(2);
     LED_Strobe_Flash(500, 50);  // Strobe for 500ms with 50ms flash rate
     
-    // Channel 3: Motor-A reverse (PC9)
+    // Channel 3: Motor-A reverse (PC9) - Alert beep before pulse
+    SoundEffect_AlertBeep();
     Optocoupler_Set(3);
     LED_Strobe_Flash(500, 50);  // Strobe for 500ms with 50ms flash rate
     
@@ -1172,12 +1487,37 @@ int main(void)
     // Initialize solenoid optocoupler LED (PC4)
     Solenoid_Opto_Init();
     
+    // Initialize H-Bridge optocoupler LEDs (PB13, PB14) for sound effects
+    HBridge_Opto_Init();
+    
+    // Voice announcement: "Escape from Planet Metroid" (three times)
+    Voice_AnnounceTitle_ThreeTimes();
+    delay_ms(500);  // Pause after announcement
+    
+    // Sound effects sequence before theme song:
+    // Emit 3 explosions spaced 2 seconds apart
+    SoundEffect_Explosion();
+    delay_ms(2000);  // 2 second delay
+    SoundEffect_Explosion();
+    delay_ms(2000);  // 2 second delay
+    SoundEffect_Explosion();
+    delay_ms(2000);  // 2 second delay
+    
     // Run optocoupler test sequence (before LCD initialization)
     // This tests each channel individually for 0.5 second with strobe effect
     Optocoupler_TestSequence();
     
     // Play Katyusha melody test (before LCD initialization)
     Play_Katyusha();
+    
+    // Sound effects sequence after theme song:
+    // Emit 3 warning sirens following the theme song
+    SoundEffect_WarningSiren(500);  // 500ms siren
+    delay_ms(200);
+    SoundEffect_WarningSiren(500);  // 500ms siren
+    delay_ms(200);
+    SoundEffect_WarningSiren(500);  // 500ms siren
+    delay_ms(200);
     
     // Initialize I2C1 for LCD
     I2C1_Init();
@@ -1274,6 +1614,8 @@ int main(void)
                     // Pulse solenoid optocoupler LED after every 3 sentences
                     if (sentence_count % 3 == 0)
                     {
+                        // Alert beep before solenoid pulse
+                        SoundEffect_AlertBeep();
                         // Pulse for 100ms to activate the solenoids
                         Solenoid_Opto_Pulse(100);
                     }
