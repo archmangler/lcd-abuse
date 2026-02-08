@@ -86,7 +86,7 @@ void HBridge_Opto_Init(void)
     GPIOB->MODER |= (1U << (HBRIDGE_OPTO_PB13 * 2));      // Output mode
     GPIOB->OTYPER &= ~(1U << HBRIDGE_OPTO_PB13);           // Push-pull
     GPIOB->OSPEEDR |= (1U << (HBRIDGE_OPTO_PB13 * 2));     // Medium speed
-    GPIOB->PUPDR &= ~(3U << (HBRIDGE_OPTO_PB13 * 2));      // No pull-up/pull-down
+    GPIOB->PUPDR &= ~(3U << (HBRIDGE_OPTO_PB13 * 2));      // No pull-up/pull-do    wn
     
     // Configure PB14 as output
     GPIOB->MODER &= ~(3U << (HBRIDGE_OPTO_PB14 * 2));
