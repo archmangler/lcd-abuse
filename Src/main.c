@@ -170,6 +170,13 @@ typedef struct {
 #define LED_STROBE_PC2      (2)   // Strobe LED 3
 #define LED_STROBE_PC3      (3)   // Strobe LED 4
 
+// Sine-wave LED pin definitions (PA4, PB0, PC5, PB12)
+// Used for pre-activation brightness pulse before solenoid/motor
+#define LED_SINE_PA4        (4)   // Arduino A2
+#define LED_SINE_PB0        (0)   // Arduino A3 (on GPIOB)
+#define LED_SINE_PC5        (5)   // Morpho
+#define LED_SINE_PB12       (12)  // Morpho (on GPIOB)
+
 // Solenoid optocoupler LED pin definition (PC4)
 // This LED drives an optocoupler which controls 3V solenoids
 // Pulses after every 3 sentences in the story
@@ -555,8 +562,16 @@ void SoundEffect_AlertBeep(void)
 
 // Vibration Sensor Input Functions
 // Initialize vibration sensor input GPIO pins (PA0, PA1, PA2, PA3)
-// These pins receive signals from TLP281-4 optocoupler outputs
-// Using PA0-PA3 as they are available on NUCLEO-F411RE board
+// These pins receive signals from TLP281-4 optocoupler outputs.
+//
+// *** NUCLEO-F411RE CONNECTOR WARNING ***
+// The code expects PA0, PA1, PA2, PA3. On the Arduino Uno R3 connector,
+// A0 = PA0 and A1 = PA1, but A2 and A3 are often PA4 and PB0 (not PA2/PA3).
+// So only sensors 1 and 2 work if wired to Arduino A0, A1, A2, A3.
+// For all four sensors you must connect:
+//   Sensor 1 -> PA0 (Arduino A0),  Sensor 2 -> PA1 (Arduino A1),
+//   Sensor 3 -> PA2 (Morpho only), Sensor 4 -> PA3 (Morpho only).
+// Use the Morpho extension headers for PA2 and PA3; do not use Arduino A2/A3.
 void VibrationSensor_Init(void)
 {
     // Enable GPIOA and SYSCFG clocks
@@ -588,35 +603,21 @@ void VibrationSensor_Init(void)
     GPIOA->PUPDR &= ~(3U << (VIBRATION_IN_PA3 * 2));
     GPIOA->PUPDR |= (1U << (VIBRATION_IN_PA3 * 2));   // Pull-up (01)
     
-    // Configure EXTI lines for PA0, PA1, PA2, PA3
-    // Map GPIOA pins to EXTI lines via SYSCFG
-    // PA0 -> EXTI0: SYSCFG_EXTICR1[3:0] = 0000 (Port A)
-    SYSCFG->EXTICR[0] &= ~(0xFU << ((0 % 4) * 4));
-    SYSCFG->EXTICR[0] |= (0U << ((0 % 4) * 4));  // Port A = 0
-    
-    // PA1 -> EXTI1: SYSCFG_EXTICR1[7:4] = 0000 (Port A)
-    SYSCFG->EXTICR[0] &= ~(0xFU << ((1 % 4) * 4));
-    SYSCFG->EXTICR[0] |= (0U << ((1 % 4) * 4));  // Port A = 0
-    
-    // PA2 -> EXTI2: SYSCFG_EXTICR1[11:8] = 0000 (Port A)
-    SYSCFG->EXTICR[0] &= ~(0xFU << ((2 % 4) * 4));
-    SYSCFG->EXTICR[0] |= (0U << ((2 % 4) * 4));  // Port A = 0
-    
-    // PA3 -> EXTI3: SYSCFG_EXTICR1[15:12] = 0000 (Port A)
-    SYSCFG->EXTICR[0] &= ~(0xFU << ((3 % 4) * 4));
-    SYSCFG->EXTICR[0] |= (0U << ((3 % 4) * 4));  // Port A = 0
+    // Map all four EXTI lines to Port A pins 0-3 in one write (EXTICR1 = EXTICR[0])
+    // EXTI0<-PA0, EXTI1<-PA1, EXTI2<-PA2, EXTI3<-PA3 (0 = Port A)
+    SYSCFG->EXTICR[0] = 0x0000U;
     
     // Configure EXTI for falling edge trigger (optocoupler output pulls to ground when active)
-    // When optocoupler is inactive: pin is HIGH (pull-up)
-    // When optocoupler activates: pin goes LOW (pulled to ground) = FALLING edge
-    EXTI->FTSR |= (EXTI_FTSR_TR0 | EXTI_FTSR_TR1 | EXTI_FTSR_TR2 | EXTI_FTSR_TR3);
     EXTI->RTSR &= ~(EXTI_FTSR_TR0 | EXTI_FTSR_TR1 | EXTI_FTSR_TR2 | EXTI_FTSR_TR3);
+    EXTI->FTSR |= (EXTI_FTSR_TR0 | EXTI_FTSR_TR1 | EXTI_FTSR_TR2 | EXTI_FTSR_TR3);
     
-    // Enable EXTI interrupts
+    // Clear any stale pending bits before enabling interrupts (write-1-to-clear)
+    EXTI->PR = (EXTI_PR_PR0 | EXTI_PR_PR1 | EXTI_PR_PR2 | EXTI_PR_PR3);
+    
+    // Enable EXTI line interrupts then NVIC
     EXTI->IMR |= (EXTI_IMR_MR0 | EXTI_IMR_MR1 | EXTI_IMR_MR2 | EXTI_IMR_MR3);
     
-    // Enable NVIC interrupts for EXTI lines
-    // EXTI0-3 have separate interrupt vectors
+    // Enable NVIC for EXTI0-3 (separate vectors: IRQn 6, 7, 8, 9)
     NVIC_ISER[0] |= (1U << 6);   // EXTI0_IRQn = 6
     NVIC_ISER[0] |= (1U << 7);   // EXTI1_IRQn = 7
     NVIC_ISER[0] |= (1U << 8);   // EXTI2_IRQn = 8
@@ -734,6 +735,8 @@ static uint8_t vibration_effect_counter = 0;
 // Prevents rapid/repeated triggers from blocking the main loop so the periodic
 // solenoid (every 3 sentences) remains evident
 volatile uint32_t vibration_cooldown_chars = 0;
+volatile uint8_t vibration_trigger_pending = 0;   // Deferred: ISR sets, main loop processes
+volatile uint8_t vibration_trigger_sensor_num = 0;
 
 // Victory trumpet fanfare on secondary speaker (PA6) for ~2 seconds
 static void VictoryTrumpet(void)
@@ -788,6 +791,7 @@ static void RunRandomVibrationEffect(uint8_t choice)
             break;
         case 2:
             // Motor A forward 1 second, then reverse 1 second
+            LED_SineBrightnessPulse_Random();
             Optocoupler_Set(4);   // Motor-A forward (PC7)
             delay_ms(1000);
             Optocoupler_Set(3);   // Motor-A reverse (PC9)
@@ -796,6 +800,7 @@ static void RunRandomVibrationEffect(uint8_t choice)
             break;
         case 3:
             // Solenoid trigger
+            LED_SineBrightnessPulse_Random();
             Solenoid_Opto_Pulse(200);
             break;
         default:
@@ -817,6 +822,11 @@ static void VibrationGame_OnTrigger(uint8_t sensor_num)
 
     // Mark this sensor as having triggered (sensor_num 1-4 -> bit 0-3)
     vibration_sensor_flags |= (1U << (sensor_num - 1));
+    
+    // Pre-activation sine-wave LED effect before H-bridge solenoid
+    LED_SineBrightnessPulse_Random();
+    // PB13/14 H-bridge solenoid: always activate at least once on any vibration trigger
+    HBridge_Opto1_Pulse(100);
     
     // Select random effect (1, 2, or 3)
     uint8_t effect = 1 + (vibration_effect_counter++ % 3);
@@ -862,14 +872,16 @@ void VibrationAlert_DisplayLCD(uint8_t sensor_num)
 }
 
 // Interrupt handler for EXTI0 (PA0 - Vibration sensor input 1)
+// Keep ISR short: set pending flag; main loop runs VibrationGame_OnTrigger
 void EXTI0_IRQHandler(void)
 {
     if (EXTI->PR & EXTI_PR_PR0)
     {
         EXTI->PR = EXTI_PR_PR0;
         if (vibration_cooldown_chars > 0)
-            return;  // Ignore during cooldown so periodic solenoid stays evident
-        VibrationGame_OnTrigger(1);
+            return;
+        vibration_trigger_sensor_num = 1;
+        vibration_trigger_pending = 1;
     }
 }
 
@@ -881,7 +893,8 @@ void EXTI1_IRQHandler(void)
         EXTI->PR = EXTI_PR_PR1;
         if (vibration_cooldown_chars > 0)
             return;
-        VibrationGame_OnTrigger(2);
+        vibration_trigger_sensor_num = 2;
+        vibration_trigger_pending = 1;
     }
 }
 
@@ -893,7 +906,8 @@ void EXTI2_IRQHandler(void)
         EXTI->PR = EXTI_PR_PR2;
         if (vibration_cooldown_chars > 0)
             return;
-        VibrationGame_OnTrigger(3);
+        vibration_trigger_sensor_num = 3;
+        vibration_trigger_pending = 1;
     }
 }
 
@@ -905,7 +919,8 @@ void EXTI3_IRQHandler(void)
         EXTI->PR = EXTI_PR_PR3;
         if (vibration_cooldown_chars > 0)
             return;
-        VibrationGame_OnTrigger(4);
+        vibration_trigger_sensor_num = 4;
+        vibration_trigger_pending = 1;
     }
 }
 
@@ -1211,6 +1226,158 @@ void LED_Strobe_Chaser(uint32_t duration_ms, uint32_t step_delay_ms)
     
     // Turn off all LEDs at end
     LED_Strobe_AllOff();
+}
+
+// Sine-wave LED control (PA4, PB0, PC5, PB12) - pre-activation brightness pulse
+static void LED_Sine_AllOff(void);
+
+void LED_Sine_Init(void)
+{
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
+    // PA4
+    GPIOA->MODER &= ~(3U << (LED_SINE_PA4 * 2));
+    GPIOA->MODER |= (1U << (LED_SINE_PA4 * 2));
+    GPIOA->OTYPER &= ~(1U << LED_SINE_PA4);
+    GPIOA->OSPEEDR |= (1U << (LED_SINE_PA4 * 2));
+    GPIOA->PUPDR &= ~(3U << (LED_SINE_PA4 * 2));
+    // PB0
+    GPIOB->MODER &= ~(3U << (LED_SINE_PB0 * 2));
+    GPIOB->MODER |= (1U << (LED_SINE_PB0 * 2));
+    GPIOB->OTYPER &= ~(1U << LED_SINE_PB0);
+    GPIOB->OSPEEDR |= (1U << (LED_SINE_PB0 * 2));
+    GPIOB->PUPDR &= ~(3U << (LED_SINE_PB0 * 2));
+    // PC5
+    GPIOC->MODER &= ~(3U << (LED_SINE_PC5 * 2));
+    GPIOC->MODER |= (1U << (LED_SINE_PC5 * 2));
+    GPIOC->OTYPER &= ~(1U << LED_SINE_PC5);
+    GPIOC->OSPEEDR |= (1U << (LED_SINE_PC5 * 2));
+    GPIOC->PUPDR &= ~(3U << (LED_SINE_PC5 * 2));
+    // PB12
+    GPIOB->MODER &= ~(3U << (LED_SINE_PB12 * 2));
+    GPIOB->MODER |= (1U << (LED_SINE_PB12 * 2));
+    GPIOB->OTYPER &= ~(1U << LED_SINE_PB12);
+    GPIOB->OSPEEDR |= (1U << (LED_SINE_PB12 * 2));
+    GPIOB->PUPDR &= ~(3U << (LED_SINE_PB12 * 2));
+    LED_Sine_AllOff();
+}
+
+static void LED_Sine_AllOff(void)
+{
+    GPIOA->BSRR = (1U << (LED_SINE_PA4 + 16));
+    GPIOB->BSRR = (1U << (LED_SINE_PB0 + 16));
+    GPIOC->BSRR = (1U << (LED_SINE_PC5 + 16));
+    GPIOB->BSRR = (1U << (LED_SINE_PB12 + 16));
+}
+
+// Set one sine LED on (HIGH); led_index 0..3
+static void LED_Sine_On(uint8_t led_index)
+{
+    switch (led_index)
+    {
+        case 0: GPIOA->BSRR = (1U << LED_SINE_PA4);  break;
+        case 1: GPIOB->BSRR = (1U << LED_SINE_PB0);  break;
+        case 2: GPIOC->BSRR = (1U << LED_SINE_PC5);  break;
+        case 3: GPIOB->BSRR = (1U << LED_SINE_PB12); break;
+    }
+}
+
+// Set one sine LED off (LOW); led_index 0..3
+static void LED_Sine_Off(uint8_t led_index)
+{
+    switch (led_index)
+    {
+        case 0: GPIOA->BSRR = (1U << (LED_SINE_PA4 + 16));  break;
+        case 1: GPIOB->BSRR = (1U << (LED_SINE_PB0 + 16));  break;
+        case 2: GPIOC->BSRR = (1U << (LED_SINE_PC5 + 16));  break;
+        case 3: GPIOB->BSRR = (1U << (LED_SINE_PB12 + 16)); break;
+    }
+}
+
+// Run sine-wave brightness pulse on one LED for ~1 second.
+// Uses software PWM with parabola 4*x*(1-x) for smooth fade up then down.
+void LED_SineBrightnessPulse(uint8_t led_index)
+{
+    if (led_index > 3) led_index = 0;
+    LED_Sine_AllOff();
+    const uint32_t steps = 100;
+    const uint32_t pwm_period_us = 1000;
+    for (uint32_t i = 0; i < steps; i++)
+    {
+        uint32_t x = i * (steps - 1 - i);
+        uint32_t brightness = (255UL * 4 * x) / ((steps - 1) * (steps - 1));
+        uint32_t on_us = (brightness * pwm_period_us) / 255;
+        uint32_t off_us = pwm_period_us - on_us;
+        uint32_t cycles = 10;
+        for (uint32_t c = 0; c < cycles; c++)
+        {
+            if (on_us > 0) { LED_Sine_On(led_index); delay_us(on_us); }
+            if (off_us > 0) { LED_Sine_Off(led_index); delay_us(off_us); }
+        }
+    }
+    LED_Sine_Off(led_index);
+}
+
+// Pseudo-random 0..3 for LED selection
+static uint8_t led_sine_rand_sel = 0;
+
+// Run sine pulse on a randomly selected LED (0..3). Called before solenoid/motor.
+void LED_SineBrightnessPulse_Random(void)
+{
+    uint8_t sel = led_sine_rand_sel++ % 4;
+    LED_SineBrightnessPulse(sel);
+}
+
+// PB13/PB14 solenoid trigger diagnostic: Tests each pin for 3 seconds with LCD labels
+// so a human can identify which pin drives the solenoid. Call after LCD init.
+void Diagnostic_PB13_PB14_SolenoidTrigger(void)
+{
+    HBridge_Opto_Off();
+    delay_ms(100);
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_print("PB13/14 Solenoid");
+    lcd_set_cursor(1, 0);
+    lcd_print("Trigger Test");
+    delay_ms(1500);
+    // Test PB13 for 3 seconds - pulse repeatedly so user can observe
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_print("Testing PB13 now");
+    lcd_set_cursor(1, 0);
+    lcd_print("Watch solenoid...");
+    for (uint32_t t = 0; t < 3000; t += 150)
+    {
+        HBridge_Opto1_On();
+        delay_ms(100);
+        HBridge_Opto1_Off();
+        delay_ms(50);
+    }
+    HBridge_Opto_Off();
+    delay_ms(500);
+    // Test PB14 for 3 seconds
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_print("Testing PB14 now");
+    lcd_set_cursor(1, 0);
+    lcd_print("Watch solenoid...");
+    for (uint32_t t = 0; t < 3000; t += 150)
+    {
+        HBridge_Opto2_On();
+        delay_ms(100);
+        HBridge_Opto2_Off();
+        delay_ms(50);
+    }
+    HBridge_Opto_Off();
+    // Summary for 3 seconds
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_print("Done. Which pin");
+    lcd_set_cursor(1, 0);
+    lcd_print("fired solenoid?");
+    delay_ms(3000);
+    HBridge_Opto_Off();
 }
 
 // Diagnostic test: Exercises all outputs for PB13, PB14, PC4, PC6, PC7, PC8, PC9
@@ -2014,6 +2181,9 @@ int main(void)
     // Initialize LED strobe GPIO pins (PC0-PC3)
     LED_Strobe_Init();
     
+    // Initialize sine-wave LED pins (PA4, PB0, PC5, PB12) for pre-activation effect
+    LED_Sine_Init();
+    
     // Initialize solenoid optocoupler LED (PC4)
     Solenoid_Opto_Init();
     
@@ -2071,6 +2241,10 @@ int main(void)
     // Clear display
     lcd_clear();
     
+    // PB13/PB14 solenoid trigger diagnostic: Tests each pin for 3 seconds with LCD labels
+    // so a human can identify which pin drives the H-bridge solenoid
+    Diagnostic_PB13_PB14_SolenoidTrigger();
+    
     // Initialize vibration sensor inputs (PA0-PA3) with interrupts - MUST be after LCD init.
     // If enabled earlier, a trigger would call FlashMessageOnOff() which uses
     // lcd_clear/lcd_print on uninitialized I2C/LCD hardware -> undefined behavior/crash.
@@ -2080,6 +2254,8 @@ int main(void)
     uint32_t heartbeat_counter = 0;
     while (1)
     {
+        // New story run: allow vibration triggers from the start (cooldown resets each run)
+        vibration_cooldown_chars = 0;
         // Stream the story text continuously
         // Character delay of ~2ms provides very fast scrolling speed (3x faster) for children
         const char *text_ptr = story_text;
@@ -2089,6 +2265,13 @@ int main(void)
         
         while (*text_ptr)
         {
+            // Process deferred vibration trigger (moved out of ISR to avoid long blocking)
+            if (vibration_trigger_pending)
+            {
+                uint8_t s = vibration_trigger_sensor_num;
+                vibration_trigger_pending = 0;
+                VibrationGame_OnTrigger(s);
+            }
             char c = *text_ptr++;
             
             // Toggle LED heartbeat approximately every 500ms
@@ -2099,15 +2282,19 @@ int main(void)
                 heartbeat_counter = 0;
             }
             
-            // Skip carriage returns
+            // Skip carriage returns (but still decrement cooldown)
             if (c == '\r')
             {
+                if (vibration_cooldown_chars > 0)
+                    vibration_cooldown_chars--;
                 continue;
             }
             
-            // Handle newlines
+            // Handle newlines (decrement cooldown before continue so it drains consistently)
             if (c == '\n')
             {
+                if (vibration_cooldown_chars > 0)
+                    vibration_cooldown_chars--;
                 row++;
                 col = 0;
                 if (row >= 4)
@@ -2156,13 +2343,27 @@ int main(void)
                 {
                     sentence_count++;
                     
-                    // Pulse solenoid optocoupler LED after every 3 sentences
+                    // Pulse solenoid optocoupler LEDs after every 3 sentences
                     if (sentence_count % 3 == 0)
                     {
+                        // Pre-activation sine-wave LED effect before solenoid/motor
+                        LED_SineBrightnessPulse_Random();
                         // Alert beep before solenoid pulse
                         SoundEffect_AlertBeep();
-                        // Pulse for 100ms to activate the solenoids
+                        // PC4 solenoid optocoupler
                         Solenoid_Opto_Pulse(100);
+                        // PB13/14 H-bridge solenoid optocoupler (same cadence as PC4)
+                        HBridge_Opto1_Pulse(100);
+                    }
+                    // Drive Motor A every 6 sentences: 2s forward, 2s reverse
+                    if (sentence_count % 6 == 0)
+                    {
+                        LED_SineBrightnessPulse_Random();
+                        Optocoupler_Set(4);   // Motor-A forward (PC7)
+                        delay_ms(2000);
+                        Optocoupler_Set(3);   // Motor-A reverse (PC9)
+                        delay_ms(2000);
+                        Optocoupler_AllOff();
                     }
                 }
             }

@@ -4,24 +4,37 @@
 
 This system implements 4 vibration sensor inputs connected to TLP281-4 optocoupler outputs. Each input triggers a unique interrupt that activates a warning siren on a buzzer directly attached to the MCU.
 
-## GPIO Pin Selection
+## GPIO Pin Selection (Current Implementation)
 
-**Selected Pins: PB10, PB11, PB12, PB15**
+**Selected Pins: PA0, PA1, PA2, PA3**
 
-| Pin | Function | Port | Notes |
-|-----|----------|------|-------|
-| **PB10** | Vibration sensor input 1 | GPIOB | EXTI10 |
-| **PB11** | Vibration sensor input 2 | GPIOB | EXTI11 |
-| **PB12** | Vibration sensor input 3 | GPIOB | EXTI12 |
-| **PB15** | Vibration sensor input 4 | GPIOB | EXTI15 |
+| Pin | Function | EXTI | NUCLEO-F411RE connector |
+|-----|----------|------|--------------------------|
+| **PA0** | Vibration sensor input 1 | EXTI0 | Arduino A0 ✅ |
+| **PA1** | Vibration sensor input 2 | EXTI1 | Arduino A1 ✅ |
+| **PA2** | Vibration sensor input 3 | EXTI2 | **Morpho only** (not Arduino A2) |
+| **PA3** | Vibration sensor input 4 | EXTI3 | **Morpho only** (not Arduino A3) |
+
+### ⚠️ NUCLEO-F411RE connector wiring (why only one sensor may work)
+
+On the **Arduino Uno R3** connector, the analog row is often:
+
+- **A0 = PA0**, **A1 = PA1** → correct for sensors 1 and 2.
+- **A2 = PA4** and **A3 = PB0** on many NUCLEO-64 boards — **not** PA2/PA3.
+
+The firmware configures **PA0, PA1, PA2, PA3**. If you connect all four optocoupler outputs to Arduino pins A0, A1, A2, A3, then only the sensor on **A0 (PA0)** — and possibly A1 (PA1) — is actually driven; A2 and A3 are wired to PA4 and PB0, which are not used by this code. Result: only one (or two) sensors appear to trigger.
+
+**Fix:** Use the **Morpho** extension headers for **PA2** and **PA3** (sensors 3 and 4). Connect:
+
+- Sensor 1 → **PA0** (Arduino A0)
+- Sensor 2 → **PA1** (Arduino A1)
+- Sensor 3 → **PA2** (Morpho header, not Arduino A2)
+- Sensor 4 → **PA3** (Morpho header, not Arduino A3)
 
 **Why these pins?**
-- ✅ All on same port (GPIOB) - easier configuration
-- ✅ Support EXTI interrupts (lines 10, 11, 12, 15)
-- ✅ No conflicts with current project:
-  - PB8/PB9: I2C1 (LCD)
-  - PB13/PB14: H-Bridge optocoupler LEDs
-- ✅ Physically adjacent pins (likely on same connector)
+- ✅ EXTI0–EXTI3 (one interrupt vector per pin)
+- ✅ All on GPIOA; single EXTICR1 setting
+- ✅ No conflict with I2C (PB8/PB9), H-Bridge (PB13/PB14), etc.
 
 **Buzzer Output: PA7**
 - ✅ Available GPIO pin
@@ -30,22 +43,24 @@ This system implements 4 vibration sensor inputs connected to TLP281-4 optocoupl
 
 ## Hardware Connection
 
-### TLP281-4 Optocoupler Output Side
+### TLP281-4 Optocoupler Output Side (active LOW → falling edge)
+
+Optocoupler outputs pull the MCU pin to GND when active. MCU pins use internal pull-up; trigger is **falling edge**.
 
 ```
 TLP281-4 Optocoupler (Output Side)    NUCLEO-F411RE
 ─────────────────────────────────     ──────────────
 
-Ch1 Collector (Pin 4) ──────────────> PB10
+Ch1 Collector (Pin 4) ──────────────> PA0 (Arduino A0)
 Ch1 Emitter (Pin 3) ─────────────────> GND
 
-Ch2 Collector (Pin 6) ──────────────> PB11
+Ch2 Collector (Pin 6) ──────────────> PA1 (Arduino A1)
 Ch2 Emitter (Pin 5) ─────────────────> GND
 
-Ch3 Collector (Pin 8) ──────────────> PB12
+Ch3 Collector (Pin 8) ──────────────> PA2 (Morpho header)
 Ch3 Emitter (Pin 7) ─────────────────> GND
 
-Ch4 Collector (Pin 10) ─────────────> PB15
+Ch4 Collector (Pin 10) ─────────────> PA3 (Morpho header)
 Ch4 Emitter (Pin 9) ─────────────────> GND
 
 Vibration Sensor ──> TLP281-4 Input Side (isolated)
@@ -67,12 +82,12 @@ Note: Buzzer should be rated for 3.3V operation
 ## Electrical Specifications
 
 ### Input Configuration
-- **Mode**: Input with pull-down
-- **Trigger**: Rising edge (optocoupler output goes HIGH)
+- **Mode**: Input with pull-up (optocoupler pulls to GND when active)
+- **Trigger**: Falling edge (pin goes from HIGH to LOW when optocoupler activates)
 - **Voltage Levels**:
-  - LOW: 0V (pull-down active)
-  - HIGH: 3.3V (when optocoupler activates)
-- **Interrupt**: EXTI (External Interrupt) on rising edge
+  - HIGH: 3.3V (pull-up when optocoupler inactive)
+  - LOW: 0V (when optocoupler activates)
+- **Interrupt**: EXTI (External Interrupt) on falling edge
 
 ### Buzzer Specifications
 - **Type**: Active buzzer (3.3V)
@@ -86,19 +101,15 @@ Note: Buzzer should be rated for 3.3V operation
 
 ### EXTI Configuration
 
-**Interrupt Lines:**
-- PB10 → EXTI10
-- PB11 → EXTI11
-- PB12 → EXTI12
-- PB15 → EXTI15
+**Interrupt Lines (separate vectors):**
+- PA0 → EXTI0 → `EXTI0_IRQHandler`
+- PA1 → EXTI1 → `EXTI1_IRQHandler`
+- PA2 → EXTI2 → `EXTI2_IRQHandler`
+- PA3 → EXTI3 → `EXTI3_IRQHandler`
 
-**Interrupt Vector**: `EXTI15_10_IRQHandler`
-- All 4 lines share the same interrupt handler
-- Handler checks which line triggered and responds accordingly
-
-**Trigger Type**: Rising edge only
-- Optocoupler output goes HIGH when vibration detected
-- Pull-down ensures clean LOW state when inactive
+**Trigger Type**: Falling edge only
+- Optocoupler output pulls pin to GND when vibration detected
+- Pull-up ensures clean HIGH state when inactive
 
 ### Interrupt Priority
 
@@ -209,29 +220,28 @@ Buzzer (-) ──> GND
 
 ### Test Sequence
 1. **Initialize system**: Call `VibrationSensor_Init()` and `Buzzer_Init()`
-2. **Trigger sensor 1**: Apply signal to PB10 → Should hear buzzer siren
-3. **Trigger sensor 2**: Apply signal to PB11 → Should hear buzzer siren
-4. **Trigger sensor 3**: Apply signal to PB12 → Should hear buzzer siren
-5. **Trigger sensor 4**: Apply signal to PB15 → Should hear buzzer siren
+2. **Trigger sensor 1**: Pull PA0 low (or tap sensor 1) → Should trigger
+3. **Trigger sensor 2**: Pull PA1 low → Should trigger
+4. **Trigger sensor 3**: Pull PA2 low (Morpho) → Should trigger
+5. **Trigger sensor 4**: Pull PA3 low (Morpho) → Should trigger
 
 ### Debugging
-- **No interrupt**: Check EXTI configuration, SYSCFG mapping
-- **No buzzer sound**: Check PA7 connection, buzzer power
-- **Multiple triggers**: Check for noise/bounce on input lines
+- **Only one sensor works**: Ensure PA2 and PA3 are wired from **Morpho** headers, not Arduino A2/A3 (those are PA4 and PB0).
+- **No interrupt**: Check EXTI configuration, SYSCFG EXTICR[0]=0, NVIC enabled for IRQ 6–9.
+- **No buzzer sound**: Check PA7 connection, buzzer power.
+- **Multiple triggers**: Check for noise/bounce on input lines.
 
 ## Summary
 
 **GPIO Pins Selected:**
-- ✅ PB10, PB11, PB12, PB15 (vibration sensor inputs)
+- ✅ PA0, PA1, PA2, PA3 (vibration sensor inputs; PA2/PA3 from Morpho)
 - ✅ PA7 (buzzer output)
 
 **Features:**
-- ✅ 4 independent interrupt-driven inputs
-- ✅ Rising edge trigger (optocoupler output HIGH)
-- ✅ Pull-down configuration (clean LOW state)
-- ✅ Unique interrupt per pin (shared handler)
-- ✅ Buzzer warning siren (500ms, frequency-modulated)
-- ✅ Non-blocking operation
+- ✅ 4 independent EXTI lines (EXTI0–EXTI3, one handler per pin)
+- ✅ Falling edge trigger (optocoupler pulls pin to GND)
+- ✅ Pull-up configuration (clean HIGH when inactive)
+- ✅ Buzzer / game effects on trigger; non-blocking where possible
 
 **Hardware Requirements:**
 - TLP281-4 optocoupler module (output side connected)
